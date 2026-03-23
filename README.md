@@ -1,1 +1,70 @@
-TODO
+# Spvirit
+
+*/ˈspɪrɪt/ of the Machine* 
+
+Spvirit is a Rust library for working with EPICS PVAccess protocol, including encoding/decoding and connection state tracking. It also includes tools for monitoring and testing PVAccess connections. These are more proof of concept than production ready, but they are available for anyone to use and contribute to.
+
+## Why Rust? 
+
+Because why not, admittedly I just wanted to learn Rust and this seemed like a fun project with a moderately useful outcome. While I have no plans to replace or compete with more established EPICS PVAccess implementations, I hope it may find use in places.
+
+Rust has a really nice developer experience and ecosystem. 
+
+## Project Structure
+The project is structured as a Cargo workspace with three crates:
+- `spvirit-types`: Contains shared data model types for PVAccess Normative Types (NT).
+- `spvirit-codec`: Contains the PVAccess protocol encoding/decoding logic and connection state tracking.
+- `spvirit-tools`: Contains command-line tools for monitoring and testing PVAccess connections.
+
+## Getting Started
+
+### Install Rust 
+``` bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+### clone the repo
+``` bash
+git clone https://github.com/ISISNeutronMuon/spvirit
+```
+### Build the project
+``` bash
+cd spvirit
+cargo build --release
+```
+
+### Run the tools
+``` bash
+cargo run --bin spvirit_monitor my:pv:name
+# or
+./target/release/spvirit_monitor my:pv:name
+# or if installed 
+cargo install spvirit-tools
+
+spvirit_monitor my:pv:name
+```
+### Using the library in your own Rust project
+TODO - add instructions for using the library as a dependency in your own Rust project, including examples of how to encode/decode PVAccess messages and track connection state. Might need some API documentation/refinement first.
+
+### Tools available
+
+| spvirit tool | EPICS Base equivalent | Description |
+|---|---|---|
+| `spvirit_get` | `pvget` | Fetch the current value of a PV |
+| `spvirit_put` | `pvput` | Write a value to a PV |
+| `spvirit_monitor` | `pvmonitor` | Subscribe to a PV and print value changes |
+| `spvirit_info` | `pvinfo` | Display field/metadata information for a PV |
+| `spvirit_list` | `pvlist` | List all available PVs on discovered servers |
+| `spvirit_server` | `softIoc` | Not fully one-to-one - just a demo, it does parse some db file vocab |
+| `spvirit_explore` |  | Interactive TUI to browse servers, select PVs, and monitor values |
+| `spvirit_search` |  | TUI showing PV search network traffic for diagnostics |
+| `spvirit_sine` |  | Continuously write a sine wave to a PV (demo/testing) |
+| `spvirit_dodeca` |  | Server publishing a rotating 3D dodecahedron as an NTNDArray PV |
+
+## References 
+
+I used the following libraries and repos as refernce materials for PVAccess protocol: 
+
+- [pvxs](https://epics-base.github.io/pvxs/)
+- [pvAccess Protocol Specification](https://docs.epics-controls.org/en/latest/pv-access/protocol.html)
+- [EPICS Base](https://github.com/epics-base/epics-base)
+- [PVAshark](https://github.com/george-mcintyre/pvashark)
