@@ -5,7 +5,7 @@ use std::path::Path;
 
 use spvirit_tools::spvirit_client::client::{encode_create_channel_request, encode_get_request};
 use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
-use spvirit_codec::spvirit_encode::{encode_header, encode_size_pva, encode_string_pva};
+use spvirit_codec::spvirit_encode::{encode_header, encode_string_pva};
 
 #[derive(Debug)]
 struct Frame {

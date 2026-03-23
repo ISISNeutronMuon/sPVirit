@@ -10,10 +10,13 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::UdpSocket;
 use tracing::debug;
 
+use crate::spvirit_client::auth::{default_authnz_host, default_authnz_user};
 use crate::spvirit_client::transport::read_packet;
 use crate::spvirit_client::types::{PvGetError, PvGetOptions};
 use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
-use spvirit_codec::spvirit_encode::{encode_header, ip_to_bytes};
+use spvirit_codec::spvirit_encode::{
+    encode_client_connection_validation, encode_search_request, ip_to_bytes,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct SearchTarget {
@@ -25,73 +28,6 @@ pub struct SearchTarget {
 pub struct DiscoveredServer {
     pub guid: [u8; 12],
     pub tcp_addr: SocketAddr,
-}
-
-fn encode_size(size: usize, is_be: bool) -> Vec<u8> {
-    if size == 0 {
-        return vec![0x00];
-    }
-    if size < 254 {
-        return vec![size as u8];
-    }
-    let mut out = vec![0xFE];
-    let bytes = if is_be {
-        (size as u32).to_be_bytes()
-    } else {
-        (size as u32).to_le_bytes()
-    };
-    out.extend_from_slice(&bytes);
-    out
-}
-
-fn encode_string(value: &str, is_be: bool) -> Vec<u8> {
-    let bytes = value.as_bytes();
-    let mut out = encode_size(bytes.len(), is_be);
-    out.extend_from_slice(bytes);
-    out
-}
-
-fn encode_search_request(
-    seq: u32,
-    port: u16,
-    reply_addr: [u8; 16],
-    pv_requests: &[(u32, &str)],
-    version: u8,
-    is_be: bool,
-) -> Vec<u8> {
-    let mut payload = Vec::new();
-    payload.extend_from_slice(&if is_be {
-        seq.to_be_bytes()
-    } else {
-        seq.to_le_bytes()
-    });
-    payload.push(0x81); // mask: reply required + unicast
-    payload.extend_from_slice(&[0u8; 3]); // reserved
-    payload.extend_from_slice(&reply_addr);
-    payload.extend_from_slice(&if is_be {
-        port.to_be_bytes()
-    } else {
-        port.to_le_bytes()
-    });
-    payload.extend_from_slice(&encode_size(1, is_be));
-    payload.extend_from_slice(&encode_string("tcp", is_be));
-    payload.extend_from_slice(&if is_be {
-        (pv_requests.len() as u16).to_be_bytes()
-    } else {
-        (pv_requests.len() as u16).to_le_bytes()
-    });
-    for (cid, pv_name) in pv_requests {
-        payload.extend_from_slice(&if is_be {
-            cid.to_be_bytes()
-        } else {
-            cid.to_le_bytes()
-        });
-        payload.extend_from_slice(&encode_string(pv_name, is_be));
-    }
-
-    let mut out = encode_header(false, is_be, false, version, 3, payload.len() as u32);
-    out.extend_from_slice(&payload);
-    out
 }
 
 pub fn parse_addr_list(env: &str) -> Vec<IpAddr> {
@@ -704,51 +640,9 @@ pub fn parse_name_servers(env_val: &str) -> Vec<SocketAddr> {
 
 /// Build a minimal PVA ConnectionValidation response for name server search.
 fn encode_search_validation(version: u8, is_be: bool) -> Vec<u8> {
-    let mut payload = Vec::new();
-    let buf_size = 87040u32;
-    payload.extend_from_slice(&if is_be {
-        buf_size.to_be_bytes()
-    } else {
-        buf_size.to_le_bytes()
-    });
-    let reg_size = 32767u16;
-    payload.extend_from_slice(&if is_be {
-        reg_size.to_be_bytes()
-    } else {
-        reg_size.to_le_bytes()
-    });
-    let qos = 0u16;
-    payload.extend_from_slice(&if is_be {
-        qos.to_be_bytes()
-    } else {
-        qos.to_le_bytes()
-    });
-    payload.extend_from_slice(&encode_string("ca", is_be));
-    let user = std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .or_else(|_| std::env::var("USERNAME"))
-        .unwrap_or_else(|_| "unknown".to_string());
-    let host = std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("HOST"))
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .unwrap_or_else(|_| "unknown".to_string());
-    payload.extend_from_slice(&[0xFD, 0x01, 0x00, 0x80, 0x00]);
-    payload.push(0x02);
-    payload.push(0x04);
-    payload.extend_from_slice(b"user");
-    payload.push(0x60);
-    payload.push(0x04);
-    payload.extend_from_slice(b"host");
-    payload.push(0x60);
-    let user_bytes = user.as_bytes();
-    let host_bytes = host.as_bytes();
-    payload.push(user_bytes.len() as u8);
-    payload.extend_from_slice(user_bytes);
-    payload.push(host_bytes.len() as u8);
-    payload.extend_from_slice(host_bytes);
-    let mut out = encode_header(false, is_be, false, version, 1, payload.len() as u32);
-    out.extend_from_slice(&payload);
-    out
+    let user = default_authnz_user();
+    let host = default_authnz_host();
+    encode_client_connection_validation(87_040, 32_767, 0, "ca", &user, &host, version, is_be)
 }
 
 /// Search for a PV via a TCP connection to a PVA name server.

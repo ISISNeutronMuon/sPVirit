@@ -2,286 +2,36 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
+use crate::spvirit_client::auth::{resolved_authnz_host, resolved_authnz_user};
 use crate::spvirit_client::search::resolve_pv_server;
 use crate::spvirit_client::transport::{read_packet, read_until};
 use crate::spvirit_client::types::{PvGetError, PvGetOptions, PvGetResult};
-use spvirit_codec::epics_decode::{decode_string, PvaPacket, PvaPacketCommand, PvaStatus};
-use spvirit_codec::spvirit_encode::encode_header;
-
-fn encode_size(size: usize, is_be: bool) -> Vec<u8> {
-    if size == 0 {
-        return vec![0x00];
-    }
-    if size < 254 {
-        return vec![size as u8];
-    }
-    let mut out = vec![0xFE];
-    let bytes = if is_be {
-        (size as u32).to_be_bytes()
-    } else {
-        (size as u32).to_le_bytes()
-    };
-    out.extend_from_slice(&bytes);
-    out
-}
-
-fn encode_string(value: &str, is_be: bool) -> Vec<u8> {
-    let bytes = value.as_bytes();
-    let mut out = encode_size(bytes.len(), is_be);
-    out.extend_from_slice(bytes);
-    out
-}
-
-fn encode_authnz_blob(user: &str, host: &str) -> Vec<u8> {
-    let mut out = Vec::new();
-    // Prefix observed in working pvget capture (AuthNZ descriptor).
-    out.extend_from_slice(&[0xFD, 0x01, 0x00, 0x80, 0x00]);
-    // Field count = 2, fields: "user" (string), "host" (string).
-    out.push(0x02);
-    out.push(0x04);
-    out.extend_from_slice(b"user");
-    out.push(0x60);
-    out.push(0x04);
-    out.extend_from_slice(b"host");
-    out.push(0x60);
-    // Field values (strings with 1-byte length).
-    let user_bytes = user.as_bytes();
-    let host_bytes = host.as_bytes();
-    out.push(user_bytes.len() as u8);
-    out.extend_from_slice(user_bytes);
-    out.push(host_bytes.len() as u8);
-    out.extend_from_slice(host_bytes);
-    out
-}
-
-fn authnz_user_override(opts: &crate::spvirit_client::types::PvGetOptions) -> Option<String> {
-    opts.authnz_user.clone()
-}
-
-fn authnz_host_override(opts: &crate::spvirit_client::types::PvGetOptions) -> Option<String> {
-    opts.authnz_host.clone()
-}
-
-fn authnz_user_fallback() -> String {
-    std::env::var("PVA_AUTHNZ_USER")
-        .or_else(|_| std::env::var("USER"))
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_else(|_| "unknown".to_string())
-}
-
-fn authnz_host_fallback() -> String {
-    std::env::var("PVA_AUTHNZ_HOST")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .or_else(|_| std::env::var("HOST"))
-        .unwrap_or_else(|_| "unknown".to_string())
-}
+use spvirit_codec::epics_decode::{
+    decode_op_response_status as codec_decode_op_response_status, decode_status, PvaPacket,
+    PvaPacketCommand, PvaStatus,
+};
+pub use spvirit_codec::spvirit_encode::{
+    encode_create_channel_request, encode_get_field_request, encode_get_request,
+    encode_monitor_request, encode_put_request,
+};
+use spvirit_codec::spvirit_encode::encode_client_connection_validation;
 
 pub fn build_client_validation(
     opts: &crate::spvirit_client::types::PvGetOptions,
     version: u8,
     is_be: bool,
 ) -> Vec<u8> {
-    let user = authnz_user_override(opts).unwrap_or_else(authnz_user_fallback);
-    let host = authnz_host_override(opts).unwrap_or_else(authnz_host_fallback);
-    encode_connection_validation_client(87_040, 32_767, 0, "ca", &user, &host, version, is_be)
-}
-
-fn encode_connection_validation_client(
-    buffer_size: u32,
-    introspection_registry_size: u16,
-    qos: u16,
-    authz: &str,
-    user: &str,
-    host: &str,
-    version: u8,
-    is_be: bool,
-) -> Vec<u8> {
-    let mut payload = Vec::new();
-    payload.extend_from_slice(&if is_be {
-        buffer_size.to_be_bytes()
-    } else {
-        buffer_size.to_le_bytes()
-    });
-    payload.extend_from_slice(&if is_be {
-        introspection_registry_size.to_be_bytes()
-    } else {
-        introspection_registry_size.to_le_bytes()
-    });
-    payload.extend_from_slice(&if is_be {
-        qos.to_be_bytes()
-    } else {
-        qos.to_le_bytes()
-    });
-    // AuthNZ string only (no flags). "ca" length 0x02 is encoded by encode_string.
-    payload.extend_from_slice(&encode_string(authz, is_be));
-    payload.extend_from_slice(&encode_authnz_blob(user, host));
-    let mut out = encode_header(false, is_be, false, version, 1, payload.len() as u32);
-    out.extend_from_slice(&payload);
-    out
-}
-
-pub fn encode_create_channel_request(cid: u32, pv_name: &str, version: u8, is_be: bool) -> Vec<u8> {
-    let mut payload = Vec::new();
-    payload.extend_from_slice(&if is_be {
-        1u16.to_be_bytes()
-    } else {
-        1u16.to_le_bytes()
-    });
-    payload.extend_from_slice(&if is_be {
-        cid.to_be_bytes()
-    } else {
-        cid.to_le_bytes()
-    });
-    payload.extend_from_slice(&encode_string(pv_name, is_be));
-    let mut out = encode_header(false, is_be, false, version, 7, payload.len() as u32);
-    out.extend_from_slice(&payload);
-    out
-}
-
-pub fn encode_get_field_request(
-    cid: u32,
-    field_name: Option<&str>,
-    version: u8,
-    is_be: bool,
-) -> Vec<u8> {
-    let mut payload = Vec::new();
-    payload.extend_from_slice(&if is_be {
-        cid.to_be_bytes()
-    } else {
-        cid.to_le_bytes()
-    });
-    // Always encode a field-name string (empty string when not provided).
-    // Some servers expect this length-prefixed string to be present.
-    payload.extend_from_slice(&encode_string(field_name.unwrap_or(""), is_be));
-    let mut out = encode_header(false, is_be, false, version, 17, payload.len() as u32);
-    out.extend_from_slice(&payload);
-    out
-}
-
-pub fn encode_get_request(
-    sid: u32,
-    ioid: u32,
-    subcmd: u8,
-    extra: &[u8],
-    version: u8,
-    is_be: bool,
-) -> Vec<u8> {
-    let mut payload = Vec::new();
-    payload.extend_from_slice(&if is_be {
-        sid.to_be_bytes()
-    } else {
-        sid.to_le_bytes()
-    });
-    payload.extend_from_slice(&if is_be {
-        ioid.to_be_bytes()
-    } else {
-        ioid.to_le_bytes()
-    });
-    payload.push(subcmd);
-    if !extra.is_empty() {
-        payload.extend_from_slice(extra);
-    }
-    let mut out = encode_header(false, is_be, false, version, 10, payload.len() as u32);
-    out.extend_from_slice(&payload);
-    out
-}
-
-pub fn encode_put_request(
-    sid: u32,
-    ioid: u32,
-    subcmd: u8,
-    extra: &[u8],
-    version: u8,
-    is_be: bool,
-) -> Vec<u8> {
-    let mut payload = Vec::new();
-    payload.extend_from_slice(&if is_be {
-        sid.to_be_bytes()
-    } else {
-        sid.to_le_bytes()
-    });
-    payload.extend_from_slice(&if is_be {
-        ioid.to_be_bytes()
-    } else {
-        ioid.to_le_bytes()
-    });
-    payload.push(subcmd);
-    if !extra.is_empty() {
-        payload.extend_from_slice(extra);
-    }
-    let mut out = encode_header(false, is_be, false, version, 11, payload.len() as u32);
-    out.extend_from_slice(&payload);
-    out
-}
-
-pub fn encode_monitor_request(
-    sid: u32,
-    ioid: u32,
-    subcmd: u8,
-    extra: &[u8],
-    version: u8,
-    is_be: bool,
-) -> Vec<u8> {
-    let mut payload = Vec::new();
-    payload.extend_from_slice(&if is_be {
-        sid.to_be_bytes()
-    } else {
-        sid.to_le_bytes()
-    });
-    payload.extend_from_slice(&if is_be {
-        ioid.to_be_bytes()
-    } else {
-        ioid.to_le_bytes()
-    });
-    payload.push(subcmd);
-    if !extra.is_empty() {
-        payload.extend_from_slice(extra);
-    }
-    let mut out = encode_header(false, is_be, false, version, 13, payload.len() as u32);
-    out.extend_from_slice(&payload);
-    out
+    let user = resolved_authnz_user(opts);
+    let host = resolved_authnz_host(opts);
+    encode_client_connection_validation(87_040, 32_767, 0, "ca", &user, &host, version, is_be)
 }
 
 pub fn decode_put_status(raw: &[u8], is_be: bool) -> Option<PvaStatus> {
-    if raw.is_empty() {
-        return None;
-    }
-    let code = raw[0];
-    if code == 0xFF {
-        return None;
-    }
-    let mut idx = 1usize;
-    let mut message: Option<String> = None;
-    let mut stack: Option<String> = None;
-    if let Some((msg, consumed)) = decode_string(&raw[idx..], is_be) {
-        message = Some(msg);
-        idx += consumed;
-        if let Some((st, consumed2)) = decode_string(&raw[idx..], is_be) {
-            stack = Some(st);
-            idx += consumed2;
-        }
-    }
-    Some(PvaStatus {
-        code,
-        message,
-        stack,
-    })
+    decode_status(raw, is_be).0
 }
 
 pub fn op_response_status(raw: &[u8], is_be: bool) -> Result<Option<PvaStatus>, PvGetError> {
-    let pkt = PvaPacket::new(raw);
-    let payload_len = pkt.header.payload_length as usize;
-    if raw.len() < 8 + payload_len {
-        return Err(PvGetError::Protocol("op response truncated".to_string()));
-    }
-    let payload = &raw[8..8 + payload_len];
-    if payload.len() < 5 {
-        return Err(PvGetError::Protocol(
-            "op response payload too short".to_string(),
-        ));
-    }
-    let body = &payload[5..];
-    Ok(decode_put_status(body, is_be))
+    codec_decode_op_response_status(raw, is_be).map_err(PvGetError::Protocol)
 }
 
 pub fn ensure_status_ok(raw: &[u8], is_be: bool, step: &str) -> Result<(), PvGetError> {
@@ -297,16 +47,11 @@ pub fn ensure_status_ok(raw: &[u8], is_be: bool, step: &str) -> Result<(), PvGet
 }
 
 pub fn is_pva_status_error(status: Option<&PvaStatus>) -> bool {
-    matches!(status, Some(s) if s.code != 0)
+    status.is_some_and(PvaStatus::is_error)
 }
 
 pub fn format_pva_status(status: &PvaStatus) -> String {
-    format!(
-        "code={} message={} stack={}",
-        status.code,
-        status.message.clone().unwrap_or_default(),
-        status.stack.clone().unwrap_or_default()
-    )
+    status.to_string()
 }
 
 pub struct ChannelConn {

@@ -158,6 +158,210 @@ pub fn encode_connection_validation(
     out
 }
 
+pub fn encode_authnz_user_host(user: &str, host: &str, is_be: bool) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&[0xFD]);
+    if is_be {
+        out.extend_from_slice(&1u16.to_be_bytes());
+    } else {
+        out.extend_from_slice(&1u16.to_le_bytes());
+    }
+    out.extend_from_slice(&[0x80, 0x00]);
+    out.push(0x02);
+    out.push(0x04);
+    out.extend_from_slice(b"user");
+    out.push(0x60);
+    out.push(0x04);
+    out.extend_from_slice(b"host");
+    out.push(0x60);
+    out.extend_from_slice(&encode_string_pva(user, is_be));
+    out.extend_from_slice(&encode_string_pva(host, is_be));
+    out
+}
+
+pub fn encode_client_connection_validation(
+    buffer_size: u32,
+    introspection_registry_size: u16,
+    qos: u16,
+    authz: &str,
+    user: &str,
+    host: &str,
+    version: u8,
+    is_be: bool,
+) -> Vec<u8> {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&if is_be {
+        buffer_size.to_be_bytes()
+    } else {
+        buffer_size.to_le_bytes()
+    });
+    payload.extend_from_slice(&if is_be {
+        introspection_registry_size.to_be_bytes()
+    } else {
+        introspection_registry_size.to_le_bytes()
+    });
+    payload.extend_from_slice(&if is_be {
+        qos.to_be_bytes()
+    } else {
+        qos.to_le_bytes()
+    });
+    payload.extend_from_slice(&encode_string_pva(authz, is_be));
+    payload.extend_from_slice(&encode_authnz_user_host(user, host, is_be));
+    let mut out = encode_header(false, is_be, false, version, 1, payload.len() as u32);
+    out.extend_from_slice(&payload);
+    out
+}
+
+pub fn encode_create_channel_request(cid: u32, pv_name: &str, version: u8, is_be: bool) -> Vec<u8> {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&if is_be {
+        1u16.to_be_bytes()
+    } else {
+        1u16.to_le_bytes()
+    });
+    payload.extend_from_slice(&if is_be {
+        cid.to_be_bytes()
+    } else {
+        cid.to_le_bytes()
+    });
+    payload.extend_from_slice(&encode_string_pva(pv_name, is_be));
+    let mut out = encode_header(false, is_be, false, version, 7, payload.len() as u32);
+    out.extend_from_slice(&payload);
+    out
+}
+
+pub fn encode_get_field_request(
+    cid: u32,
+    field_name: Option<&str>,
+    version: u8,
+    is_be: bool,
+) -> Vec<u8> {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&if is_be {
+        cid.to_be_bytes()
+    } else {
+        cid.to_le_bytes()
+    });
+    payload.extend_from_slice(&encode_string_pva(field_name.unwrap_or(""), is_be));
+    let mut out = encode_header(false, is_be, false, version, 17, payload.len() as u32);
+    out.extend_from_slice(&payload);
+    out
+}
+
+pub fn encode_op_request(
+    command: u8,
+    sid: u32,
+    ioid: u32,
+    subcmd: u8,
+    extra: &[u8],
+    version: u8,
+    is_be: bool,
+) -> Vec<u8> {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&if is_be {
+        sid.to_be_bytes()
+    } else {
+        sid.to_le_bytes()
+    });
+    payload.extend_from_slice(&if is_be {
+        ioid.to_be_bytes()
+    } else {
+        ioid.to_le_bytes()
+    });
+    payload.push(subcmd);
+    payload.extend_from_slice(extra);
+    let mut out = encode_header(false, is_be, false, version, command, payload.len() as u32);
+    out.extend_from_slice(&payload);
+    out
+}
+
+pub fn encode_get_request(
+    sid: u32,
+    ioid: u32,
+    subcmd: u8,
+    extra: &[u8],
+    version: u8,
+    is_be: bool,
+) -> Vec<u8> {
+    encode_op_request(10, sid, ioid, subcmd, extra, version, is_be)
+}
+
+pub fn encode_put_request(
+    sid: u32,
+    ioid: u32,
+    subcmd: u8,
+    extra: &[u8],
+    version: u8,
+    is_be: bool,
+) -> Vec<u8> {
+    encode_op_request(11, sid, ioid, subcmd, extra, version, is_be)
+}
+
+pub fn encode_monitor_request(
+    sid: u32,
+    ioid: u32,
+    subcmd: u8,
+    extra: &[u8],
+    version: u8,
+    is_be: bool,
+) -> Vec<u8> {
+    encode_op_request(13, sid, ioid, subcmd, extra, version, is_be)
+}
+
+pub fn encode_rpc_request(
+    sid: u32,
+    ioid: u32,
+    subcmd: u8,
+    extra: &[u8],
+    version: u8,
+    is_be: bool,
+) -> Vec<u8> {
+    encode_op_request(20, sid, ioid, subcmd, extra, version, is_be)
+}
+
+pub fn encode_search_request(
+    seq: u32,
+    port: u16,
+    reply_addr: [u8; 16],
+    pv_requests: &[(u32, &str)],
+    version: u8,
+    is_be: bool,
+) -> Vec<u8> {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&if is_be {
+        seq.to_be_bytes()
+    } else {
+        seq.to_le_bytes()
+    });
+    payload.push(0x81);
+    payload.extend_from_slice(&[0u8; 3]);
+    payload.extend_from_slice(&reply_addr);
+    payload.extend_from_slice(&if is_be {
+        port.to_be_bytes()
+    } else {
+        port.to_le_bytes()
+    });
+    payload.extend_from_slice(&encode_size_pva(1, is_be));
+    payload.extend_from_slice(&encode_string_pva("tcp", is_be));
+    payload.extend_from_slice(&if is_be {
+        (pv_requests.len() as u16).to_be_bytes()
+    } else {
+        (pv_requests.len() as u16).to_le_bytes()
+    });
+    for (cid, pv_name) in pv_requests {
+        payload.extend_from_slice(&if is_be {
+            cid.to_be_bytes()
+        } else {
+            cid.to_le_bytes()
+        });
+        payload.extend_from_slice(&encode_string_pva(pv_name, is_be));
+    }
+
+    let mut out = encode_header(false, is_be, false, version, 3, payload.len() as u32);
+    out.extend_from_slice(&payload);
+    out
+}
+
 pub fn encode_create_channel_response(cid: u32, sid: u32, version: u8, is_be: bool) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&if is_be {
@@ -729,6 +933,23 @@ mod tests {
     }
 
     #[test]
+    fn encode_decode_client_connection_validation_roundtrip() {
+        let msg =
+            encode_client_connection_validation(87_040, 32_767, 0, "ca", "alice", "host1", 2, false);
+        let mut pkt = PvaPacket::new(&msg);
+        let cmd = pkt.decode_payload().expect("decoded");
+        match cmd {
+            PvaPacketCommand::ConnectionValidation(payload) => {
+                assert!(!payload.is_server);
+                assert_eq!(payload.buffer_size, 87_040);
+                assert_eq!(payload.introspection_registry_size, 32_767);
+                assert_eq!(payload.qos, 0);
+            }
+            other => panic!("unexpected decode: {:?}", other),
+        }
+    }
+
+    #[test]
     fn encode_decode_search_response_roundtrip() {
         let guid = [1u8; 12];
         let seq = 42;
@@ -872,6 +1093,124 @@ mod tests {
                 let status = payload.status.expect("status");
                 assert_eq!(status.code, 0x02);
                 assert_eq!(status.message.as_deref(), Some("listing disabled"));
+            }
+            other => panic!("unexpected decode: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn encode_decode_create_channel_request_roundtrip() {
+        let msg = encode_create_channel_request(7, "TEST:PV", 2, false);
+        let mut pkt = PvaPacket::new(&msg);
+        let cmd = pkt.decode_payload().expect("decoded");
+        match cmd {
+            PvaPacketCommand::CreateChannel(payload) => {
+                assert!(!payload.is_server);
+                assert_eq!(payload.channels, vec![(7, "TEST:PV".to_string())]);
+            }
+            other => panic!("unexpected decode: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn encode_decode_get_field_request_roundtrip() {
+        let msg = encode_get_field_request(9, Some("*"), 2, false);
+        let mut pkt = PvaPacket::new(&msg);
+        let cmd = pkt.decode_payload().expect("decoded");
+        match cmd {
+            PvaPacketCommand::GetField(payload) => {
+                assert!(!payload.is_server);
+                assert_eq!(payload.cid, 9);
+                assert_eq!(payload.field_name.as_deref(), Some("*"));
+            }
+            other => panic!("unexpected decode: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn encode_decode_get_request_roundtrip() {
+        let msg = encode_get_request(1, 2, 0x08, &[0xfd, 0x02, 0x00], 2, false);
+        let mut pkt = PvaPacket::new(&msg);
+        let cmd = pkt.decode_payload().expect("decoded");
+        match cmd {
+            PvaPacketCommand::Op(op) => {
+                assert_eq!(op.command, 10);
+                assert_eq!(op.sid_or_cid, 1);
+                assert_eq!(op.ioid, 2);
+                assert_eq!(op.subcmd, 0x08);
+            }
+            other => panic!("unexpected decode: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn encode_decode_put_request_roundtrip() {
+        let msg = encode_put_request(3, 4, 0x40, &[0xAA], 2, false);
+        let mut pkt = PvaPacket::new(&msg);
+        let cmd = pkt.decode_payload().expect("decoded");
+        match cmd {
+            PvaPacketCommand::Op(op) => {
+                assert_eq!(op.command, 11);
+                assert_eq!(op.sid_or_cid, 3);
+                assert_eq!(op.ioid, 4);
+                assert_eq!(op.subcmd, 0x40);
+            }
+            other => panic!("unexpected decode: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn encode_decode_monitor_request_roundtrip() {
+        let msg = encode_monitor_request(5, 6, 0x44, &[], 2, false);
+        let mut pkt = PvaPacket::new(&msg);
+        let cmd = pkt.decode_payload().expect("decoded");
+        match cmd {
+            PvaPacketCommand::Op(op) => {
+                assert_eq!(op.command, 13);
+                assert_eq!(op.sid_or_cid, 5);
+                assert_eq!(op.ioid, 6);
+                assert_eq!(op.subcmd, 0x44);
+            }
+            other => panic!("unexpected decode: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn encode_decode_rpc_request_roundtrip() {
+        let msg = encode_rpc_request(7, 8, 0x00, &[0x80, 0x00], 2, false);
+        let mut pkt = PvaPacket::new(&msg);
+        let cmd = pkt.decode_payload().expect("decoded");
+        match cmd {
+            PvaPacketCommand::Op(op) => {
+                assert_eq!(op.command, 20);
+                assert_eq!(op.sid_or_cid, 7);
+                assert_eq!(op.ioid, 8);
+                assert_eq!(op.subcmd, 0x00);
+            }
+            other => panic!("unexpected decode: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn encode_decode_search_request_roundtrip() {
+        let seq = 1234;
+        let cid = 42;
+        let port = 5076;
+        let reply_addr = ip_to_bytes(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)));
+        let requests = [(cid, "TEST:PV")];
+        let msg = encode_search_request(seq, port, reply_addr, &requests, 2, false);
+        let mut pkt = PvaPacket::new(&msg);
+        let cmd = pkt.decode_payload().expect("decoded");
+        match cmd {
+            PvaPacketCommand::Search(payload) => {
+                assert_eq!(payload.seq, seq);
+                assert_eq!(payload.mask, 0x81);
+                assert_eq!(payload.addr, reply_addr);
+                assert_eq!(payload.port, port);
+                assert_eq!(payload.protocols, vec!["tcp".to_string()]);
+                assert_eq!(payload.pv_requests.len(), 1);
+                assert_eq!(payload.pv_requests[0].0, cid);
+                assert_eq!(payload.pv_requests[0].1, "TEST:PV");
             }
             other => panic!("unexpected decode: {:?}", other),
         }

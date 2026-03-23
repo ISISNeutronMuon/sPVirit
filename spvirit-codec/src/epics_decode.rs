@@ -342,7 +342,7 @@ pub fn decode_string(raw: &[u8], is_be: bool) -> Option<(String, usize)> {
     Some((s, total_len))
 }
 
-fn decode_status(raw: &[u8], is_be: bool) -> (Option<PvaStatus>, usize) {
+pub fn decode_status(raw: &[u8], is_be: bool) -> (Option<PvaStatus>, usize) {
     if raw.is_empty() {
         return (None, 0);
     }
@@ -369,6 +369,19 @@ fn decode_status(raw: &[u8], is_be: bool) -> (Option<PvaStatus>, usize) {
         }),
         idx,
     )
+}
+
+pub fn decode_op_response_status(raw: &[u8], is_be: bool) -> Result<Option<PvaStatus>, String> {
+    let pkt = PvaPacket::new(raw);
+    let payload_len = pkt.header.payload_length as usize;
+    if raw.len() < 8 + payload_len {
+        return Err("op response truncated".to_string());
+    }
+    let payload = &raw[8..8 + payload_len];
+    if payload.len() < 5 {
+        return Err("op response payload too short".to_string());
+    }
+    Ok(decode_status(&payload[5..], is_be).0)
 }
 
 #[derive(Debug)]
@@ -1515,6 +1528,12 @@ pub struct PvaStatus {
     pub stack: Option<String>,
 }
 
+impl PvaStatus {
+    pub fn is_error(&self) -> bool {
+        self.code != 0
+    }
+}
+
 /// Display implementations
 // beacon payload display
 impl fmt::Display for PvaBeaconPayload {
@@ -1596,6 +1615,18 @@ impl fmt::Display for PvaConnectionValidationPayload {
                 dir, self.buffer_size, self.introspection_registry_size, self.qos, authz
             )
         }
+    }
+}
+
+impl fmt::Display for PvaStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "code={} message={} stack={}",
+            self.code,
+            self.message.as_deref().unwrap_or(""),
+            self.stack.as_deref().unwrap_or("")
+        )
     }
 }
 
@@ -1955,5 +1986,44 @@ mod tests {
         } else {
             panic!("unexpected cmd");
         }
+    }
+
+    #[test]
+    fn pva_status_reports_error_state() {
+        let ok = PvaStatus {
+            code: 0,
+            message: None,
+            stack: None,
+        };
+        let err = PvaStatus {
+            code: 2,
+            message: Some("bad".to_string()),
+            stack: None,
+        };
+        assert!(!ok.is_error());
+        assert!(err.is_error());
+    }
+
+    #[test]
+    fn pva_status_display_includes_message_and_stack() {
+        let status = PvaStatus {
+            code: 2,
+            message: Some("bad".to_string()),
+            stack: Some("trace".to_string()),
+        };
+        assert_eq!(status.to_string(), "code=2 message=bad stack=trace");
+    }
+
+    #[test]
+    fn decode_op_response_status_reads_status_from_packet() {
+        let raw = vec![
+            0xCA, 0x02, 0x40, 0x0B, 0x0A, 0x00, 0x00, 0x00, 0x11, 0x22, 0x33, 0x44, 0x00, 0x02,
+            0x03, b'b', b'a', b'd', 0x00,
+        ];
+        let status = decode_op_response_status(&raw, false)
+            .expect("status parse")
+            .expect("status");
+        assert!(status.is_error());
+        assert_eq!(status.message.as_deref(), Some("bad"));
     }
 }

@@ -292,7 +292,7 @@ impl RecordInstance {
             }
         }
     }
-
+    // 
     pub fn nt_mut(&mut self) -> &mut NtScalar {
         self.data.nt_mut()
     }

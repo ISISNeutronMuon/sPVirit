@@ -377,10 +377,10 @@ async fn pvget_external_optional() {
         opts.search_addr = Some(addr.parse().expect("PVA_TEST_SEARCH_ADDR ip"));
     }
     if let Ok(addr) = std::env::var("PVA_TEST_ADDR_LIST") {
-        std::env::set_var("EPICS_PVA_ADDR_LIST", addr);
+        unsafe { std::env::set_var("EPICS_PVA_ADDR_LIST", addr) };
     }
     if let Ok(auto) = std::env::var("PVA_TEST_AUTO_ADDR_LIST") {
-        std::env::set_var("EPICS_PVA_AUTO_ADDR_LIST", auto);
+        unsafe { std::env::set_var("EPICS_PVA_AUTO_ADDR_LIST", auto) };
     }
     if let Ok(addr) = std::env::var("PVA_TEST_BIND_ADDR") {
         opts.bind_addr = Some(addr.parse().expect("PVA_TEST_BIND_ADDR ip"));
