@@ -7,12 +7,12 @@ use tokio::time::{interval, timeout};
 
 use crate::spvirit_client::client::{
     build_client_validation, encode_create_channel_request, encode_get_field_request,
-    encode_get_request, encode_monitor_request, format_pva_status, is_pva_status_error, pvget,
+    encode_get_request, encode_monitor_request, pvget,
 };
-use crate::spvirit_client::transport::read_packet;
+use crate::spvirit_client::transport::{read_packet, read_until};
 use crate::spvirit_client::types::{PvGetError, PvGetOptions, PvGetResult};
 use spvirit_codec::epics_decode::PvaPacketCommand;
-use spvirit_codec::spvirit_encode::{encode_control_message, encode_header};
+use spvirit_codec::spvirit_encode::{encode_control_message, encode_rpc_request};
 use spvirit_codec::spvd_decode::{
     extract_nt_scalar_value, DecodedValue, FieldDesc, FieldType, PvdDecoder, StructureDesc,
 };
@@ -68,32 +68,6 @@ fn candidate_server_addrs(opts: &PvGetOptions, server_addr: SocketAddr) -> Vec<S
     if default_addr != server_addr {
         out.push(default_addr);
     }
-    out
-}
-
-fn encode_rpc_request(
-    sid: u32,
-    ioid: u32,
-    subcmd: u8,
-    extra: &[u8],
-    version: u8,
-    is_be: bool,
-) -> Vec<u8> {
-    let mut payload = Vec::new();
-    payload.extend_from_slice(&if is_be {
-        sid.to_be_bytes()
-    } else {
-        sid.to_le_bytes()
-    });
-    payload.extend_from_slice(&if is_be {
-        ioid.to_be_bytes()
-    } else {
-        ioid.to_le_bytes()
-    });
-    payload.push(subcmd);
-    payload.extend_from_slice(extra);
-    let mut out = encode_header(false, is_be, false, version, 20, payload.len() as u32);
-    out.extend_from_slice(&payload);
     out
 }
 
@@ -227,31 +201,6 @@ where
     }
 }
 
-async fn read_until<F>(
-    stream: &mut TcpStream,
-    timeout_dur: Duration,
-    mut predicate: F,
-) -> Result<PvaPacketCommand, PvGetError>
-where
-    F: FnMut(&PvaPacketCommand) -> bool,
-{
-    let deadline = tokio::time::Instant::now() + timeout_dur;
-    loop {
-        let now = tokio::time::Instant::now();
-        if now >= deadline {
-            return Err(PvGetError::Timeout("read_until"));
-        }
-        let remaining = deadline - now;
-        let bytes = read_packet(stream, remaining).await?;
-        let mut pkt = spvirit_codec::epics_decode::PvaPacket::new(&bytes);
-        if let Some(cmd) = pkt.decode_payload() {
-            if predicate(&cmd) {
-                return Ok(cmd);
-            }
-        }
-    }
-}
-
 async fn list_pvs_via_pvlist(
     opts: &PvGetOptions,
     server_addr: SocketAddr,
@@ -309,24 +258,27 @@ pub async fn list_pvs_via_get_field(
     let get_field = encode_get_field_request(0, field_pattern, version, is_be);
     stream.write_all(&get_field).await?;
 
-    let cmd = read_until(
+    let field_resp = read_until(
         &mut stream,
         opts.timeout,
         |cmd| matches!(cmd, PvaPacketCommand::GetField(payload) if payload.is_server),
     )
     .await?;
-
+    let mut pkt = spvirit_codec::epics_decode::PvaPacket::new(&field_resp);
+    let cmd = pkt.decode_payload().ok_or(PvGetError::Protocol(
+        "get_field listing decode failed".to_string(),
+    ))?;
     let PvaPacketCommand::GetField(payload) = cmd else {
         return Err(PvGetError::Protocol(
             "unexpected GET_FIELD response".to_string(),
         ));
     };
 
-    if is_pva_status_error(payload.status.as_ref()) {
+    if payload.status.as_ref().is_some_and(|s| s.is_error()) {
         let detail = payload
             .status
             .as_ref()
-            .map(format_pva_status)
+            .map(ToString::to_string)
             .unwrap_or_default();
         return Err(PvGetError::Protocol(format!(
             "get_field listing error: {}",
@@ -389,13 +341,17 @@ async fn list_pvs_via_server_rpc_channel(
         matches!(cmd, PvaPacketCommand::CreateChannel(_))
     })
     .await?;
-    let sid = match create_cmd {
+    let mut pkt = spvirit_codec::epics_decode::PvaPacket::new(&create_cmd);
+    let decoded = pkt.decode_payload().ok_or(PvGetError::Protocol(
+        "create_channel listing decode failed".to_string(),
+    ))?;
+    let sid = match decoded {
         PvaPacketCommand::CreateChannel(payload) => {
-            if is_pva_status_error(payload.status.as_ref()) {
+            if payload.status.as_ref().is_some_and(|s| s.is_error()) {
                 let detail = payload
                     .status
                     .as_ref()
-                    .map(format_pva_status)
+                    .map(ToString::to_string)
                     .unwrap_or_default();
                 return Err(PvGetError::Protocol(format!(
                     "server RPC channel '{}' create failed: {}",
@@ -416,17 +372,21 @@ async fn list_pvs_via_server_rpc_channel(
     let rpc_init = encode_rpc_request(sid, ioid, 0x08, &PV_REQUEST_EMPTY, version, is_be);
     stream.write_all(&rpc_init).await?;
 
-    let init_cmd = read_until(&mut stream, opts.timeout, |cmd| match cmd {
+    let init_resp = read_until(&mut stream, opts.timeout, |cmd| match cmd {
         PvaPacketCommand::Op(op) => op.command == 20 && op.ioid == ioid && (op.subcmd & 0x08) != 0,
         _ => false,
     })
     .await?;
+    let mut pkt = spvirit_codec::epics_decode::PvaPacket::new(&init_resp);
+    let init_cmd = pkt.decode_payload().ok_or(PvGetError::Protocol(
+        "rpc init decode failed".to_string(),
+    ))?;
     if let PvaPacketCommand::Op(op) = init_cmd {
-        if is_pva_status_error(op.status.as_ref()) {
+        if op.status.as_ref().is_some_and(|s| s.is_error()) {
             let detail = op
                 .status
                 .as_ref()
-                .map(format_pva_status)
+                .map(ToString::to_string)
                 .unwrap_or_default();
             return Err(PvGetError::Protocol(format!("rpc init failed: {}", detail)));
         }
@@ -436,20 +396,23 @@ async fn list_pvs_via_server_rpc_channel(
     let rpc_req = encode_rpc_request(sid, ioid, 0x00, &rpc_payload, version, is_be);
     stream.write_all(&rpc_req).await?;
 
-    let rpc_cmd = read_until(&mut stream, opts.timeout, |cmd| match cmd {
+    let rpc_resp = read_until(&mut stream, opts.timeout, |cmd| match cmd {
         PvaPacketCommand::Op(op) => op.command == 20 && op.ioid == ioid && op.subcmd == 0x00,
         _ => false,
     })
     .await?;
-
+    let mut pkt = spvirit_codec::epics_decode::PvaPacket::new(&rpc_resp);
+    let rpc_cmd = pkt.decode_payload().ok_or(PvGetError::Protocol(
+        "rpc response decode failed".to_string(),
+    ))?;
     let PvaPacketCommand::Op(op) = rpc_cmd else {
         return Err(PvGetError::Protocol("unexpected RPC response".to_string()));
     };
-    if is_pva_status_error(op.status.as_ref()) {
+    if op.status.as_ref().is_some_and(|s| s.is_error()) {
         let detail = op
             .status
             .as_ref()
-            .map(format_pva_status)
+            .map(ToString::to_string)
             .unwrap_or_default();
         return Err(PvGetError::Protocol(format!(
             "rpc execute failed: {}",
@@ -550,13 +513,17 @@ pub async fn list_pvs_via_server_get(
             matches!(cmd, PvaPacketCommand::CreateChannel(_))
         })
         .await?;
-        let sid = match create_cmd {
+        let mut pkt = spvirit_codec::epics_decode::PvaPacket::new(&create_cmd);
+        let decoded = pkt.decode_payload().ok_or(PvGetError::Protocol(
+            "server get create decode failed".to_string(),
+        ))?;
+        let sid = match decoded {
             PvaPacketCommand::CreateChannel(payload) => {
-                if is_pva_status_error(payload.status.as_ref()) {
+                if payload.status.as_ref().is_some_and(|s| s.is_error()) {
                     let detail = payload
                         .status
                         .as_ref()
-                        .map(format_pva_status)
+                        .map(ToString::to_string)
                         .unwrap_or_default();
                     return Err(PvGetError::Protocol(format!(
                         "server GET channel '{}' create failed: {}",
@@ -575,20 +542,24 @@ pub async fn list_pvs_via_server_get(
         let ioid = 1u32;
         let init_req = encode_get_request(sid, ioid, 0x08, &PV_REQUEST_EMPTY, version, is_be);
         stream.write_all(&init_req).await?;
-        let init_cmd = read_until(&mut stream, opts.timeout, |cmd| match cmd {
+        let init_resp = read_until(&mut stream, opts.timeout, |cmd| match cmd {
             PvaPacketCommand::Op(op) => {
                 op.command == 10 && op.ioid == ioid && (op.subcmd & 0x08) != 0
             }
             _ => false,
         })
         .await?;
+        let mut pkt = spvirit_codec::epics_decode::PvaPacket::new(&init_resp);
+        let init_cmd = pkt.decode_payload().ok_or(PvGetError::Protocol(
+            "server get init decode failed".to_string(),
+        ))?;
         let init_desc = match init_cmd {
             PvaPacketCommand::Op(op) => {
-                if is_pva_status_error(op.status.as_ref()) {
+                if op.status.as_ref().is_some_and(|s| s.is_error()) {
                     let detail = op
                         .status
                         .as_ref()
-                        .map(format_pva_status)
+                        .map(ToString::to_string)
                         .unwrap_or_default();
                     return Err(PvGetError::Protocol(format!(
                         "server GET init failed: {}",
@@ -602,11 +573,15 @@ pub async fn list_pvs_via_server_get(
 
         let data_req = encode_get_request(sid, ioid, 0x00, &[], version, is_be);
         stream.write_all(&data_req).await?;
-        let data_cmd = read_until(&mut stream, opts.timeout, |cmd| match cmd {
+        let data_resp = read_until(&mut stream, opts.timeout, |cmd| match cmd {
             PvaPacketCommand::Op(op) => op.command == 10 && op.ioid == ioid && op.subcmd == 0x00,
             _ => false,
         })
         .await?;
+        let mut pkt = spvirit_codec::epics_decode::PvaPacket::new(&data_resp);
+        let data_cmd = pkt.decode_payload().ok_or(PvGetError::Protocol(
+            "server get data decode failed".to_string(),
+        ))?;
 
         let mut names = Vec::new();
         let PvaPacketCommand::Op(mut op) = data_cmd else {
@@ -614,11 +589,11 @@ pub async fn list_pvs_via_server_get(
                 "unexpected GET data response".to_string(),
             ));
         };
-        if is_pva_status_error(op.status.as_ref()) {
+        if op.status.as_ref().is_some_and(|s| s.is_error()) {
             let detail = op
                 .status
                 .as_ref()
-                .map(format_pva_status)
+                .map(ToString::to_string)
                 .unwrap_or_default();
             return Err(PvGetError::Protocol(format!(
                 "server GET data failed: {}",
@@ -847,13 +822,17 @@ where
         matches!(cmd, PvaPacketCommand::CreateChannel(_))
     })
     .await?;
-    let sid = match create_cmd {
+    let mut pkt = spvirit_codec::epics_decode::PvaPacket::new(&create_cmd);
+    let decoded = pkt.decode_payload().ok_or(PvGetError::Protocol(
+        "monitor create decode failed".to_string(),
+    ))?;
+    let sid = match decoded {
         PvaPacketCommand::CreateChannel(payload) => {
-            if is_pva_status_error(payload.status.as_ref()) {
+            if payload.status.as_ref().is_some_and(|s| s.is_error()) {
                 let detail = payload
                     .status
                     .as_ref()
-                    .map(format_pva_status)
+                    .map(ToString::to_string)
                     .unwrap_or_default();
                 return Err(PvGetError::Protocol(format!(
                     "create_channel error: {}",
@@ -872,18 +851,22 @@ where
     let ioid = 1u32;
     let mon_init = encode_monitor_request(sid, ioid, 0x08, &PV_REQUEST_EMPTY, version, is_be);
     stream.write_all(&mon_init).await?;
-    let init_cmd = read_until(&mut stream, opts.timeout, |cmd| match cmd {
+    let init_resp = read_until(&mut stream, opts.timeout, |cmd| match cmd {
         PvaPacketCommand::Op(op) => op.command == 13 && op.ioid == ioid && (op.subcmd & 0x08) != 0,
         _ => false,
     })
     .await?;
+    let mut pkt = spvirit_codec::epics_decode::PvaPacket::new(&init_resp);
+    let init_cmd = pkt.decode_payload().ok_or(PvGetError::Protocol(
+        "monitor init decode failed".to_string(),
+    ))?;
     let desc = match init_cmd {
         PvaPacketCommand::Op(op) => {
-            if is_pva_status_error(op.status.as_ref()) {
+            if op.status.as_ref().is_some_and(|s| s.is_error()) {
                 let detail = op
                     .status
                     .as_ref()
-                    .map(format_pva_status)
+                    .map(ToString::to_string)
                     .unwrap_or_default();
                 return Err(PvGetError::Protocol(format!(
                     "monitor init failed: {}",
@@ -1049,9 +1032,9 @@ mod tests {
             message: Some("bad".to_string()),
             stack: None,
         };
-        assert!(!is_pva_status_error(None));
-        assert!(!is_pva_status_error(Some(&ok)));
-        assert!(is_pva_status_error(Some(&err)));
+        assert!(!None::<&PvaStatus>.is_some_and(|s| s.is_error()));
+        assert!(!Some(&ok).is_some_and(|s| s.is_error()));
+        assert!(Some(&err).is_some_and(|s| s.is_error()));
     }
 
     #[test]

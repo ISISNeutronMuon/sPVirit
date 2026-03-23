@@ -16,6 +16,7 @@ use crate::spvirit_client::types::{PvGetError, PvGetOptions};
 use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
 use spvirit_codec::spvirit_encode::{
     encode_client_connection_validation, encode_search_request, ip_to_bytes,
+    socket_addr_from_pva_bytes,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -294,16 +295,7 @@ fn join_multicast_any(socket: &std::net::UdpSocket, bind: IpAddr) {
 }
 
 fn decode_search_response_addr(addr: [u8; 16], port: u16, src: SocketAddr) -> SocketAddr {
-    let mut ip = if addr[0..12] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF] {
-        IpAddr::V4(Ipv4Addr::new(addr[12], addr[13], addr[14], addr[15]))
-    } else {
-        IpAddr::V6(addr.into())
-    };
-    // Some servers respond with 0.0.0.0 or ::; fall back to the UDP source address.
-    if ip.is_unspecified() {
-        ip = src.ip();
-    }
-    SocketAddr::new(ip, port)
+    socket_addr_from_pva_bytes(addr, port).unwrap_or_else(|| SocketAddr::new(src.ip(), port))
 }
 
 fn normalize_discovered_servers(items: Vec<DiscoveredServer>) -> Vec<DiscoveredServer> {
@@ -1235,5 +1227,12 @@ mod tests {
     fn parse_name_servers_ipv6_without_port() {
         let addrs = parse_name_servers("::1");
         assert_eq!(addrs, vec![SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 5075)]);
+    }
+
+    #[test]
+    fn decode_search_response_addr_falls_back_to_udp_source_when_unspecified() {
+        let src: SocketAddr = "192.168.1.20:5076".parse().unwrap();
+        let decoded = decode_search_response_addr([0u8; 16], 5075, src);
+        assert_eq!(decoded, "192.168.1.20:5075".parse().unwrap());
     }
 }

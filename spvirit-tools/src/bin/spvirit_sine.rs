@@ -8,14 +8,12 @@ use tokio::runtime::Runtime;
 use tokio::time::{interval, Instant};
 
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
-use spvirit_tools::spvirit_client::client::{
-    decode_put_status, encode_put_request, establish_channel, ChannelConn,
-};
+use spvirit_tools::spvirit_client::client::{encode_put_request, establish_channel, ChannelConn};
 use spvirit_tools::spvirit_client::put_encode::encode_put_payload;
 use spvirit_tools::spvirit_client::search::resolve_pv_server;
 use spvirit_tools::spvirit_client::transport::read_until;
 use spvirit_tools::spvirit_client::types::{PvGetError, PvGetOptions};
-use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
+use spvirit_codec::epics_decode::{decode_status, PvaPacket, PvaPacketCommand};
 use spvirit_codec::spvirit_encode::encode_control_message;
 
 async fn read_packet_stream<R: AsyncReadExt + Unpin>(
@@ -113,7 +111,7 @@ async fn pvsine(
             if pkt.header.command == 11 && !pkt.header.flags.is_control {
                 if bytes.len() >= 8 + payload_len && payload_len >= 5 {
                     let body = &bytes[8 + 5..8 + payload_len];
-                    if let Some(st) = decode_put_status(body, is_be_reader) {
+                    if let Some(st) = decode_status(body, is_be_reader).0 {
                         if st.code != 0 {
                             let msg = st.message.unwrap_or_else(|| format!("code={}", st.code));
                             eprintln!("put error: {}", msg);

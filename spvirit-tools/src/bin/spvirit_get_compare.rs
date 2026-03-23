@@ -257,7 +257,7 @@ fn parse_raw_dump(path: &str) -> Result<Vec<Frame>, Box<dyn std::error::Error>> 
     }
     // Raw dump doesn't include direction. Infer by command flags (server bit).
     for f in &mut out {
-        let mut pkt = PvaPacket::new(&f.bytes);
+        let pkt = PvaPacket::new(&f.bytes);
         let is_server = pkt.header.flags.is_server;
         f.dir = if is_server { "S->C" } else { "C->S" }.to_string();
     }

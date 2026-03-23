@@ -1134,7 +1134,7 @@ mod tests {
         let decoder = PvdDecoder::new(false);
         let parsed_desc = decoder.parse_introspection(&pvd).expect("desc parse failed");
         let data_start = 1 + desc_bytes.len();
-        let (decoded, consumed) = decoder
+        let (_decoded, consumed) = decoder
             .decode_structure(&pvd[data_start..], &parsed_desc)
             .expect("data decode failed");
         assert!(consumed > 0, "consumed should be > 0");

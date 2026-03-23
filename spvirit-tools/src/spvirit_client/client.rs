@@ -7,8 +7,7 @@ use crate::spvirit_client::search::resolve_pv_server;
 use crate::spvirit_client::transport::{read_packet, read_until};
 use crate::spvirit_client::types::{PvGetError, PvGetOptions, PvGetResult};
 use spvirit_codec::epics_decode::{
-    decode_op_response_status as codec_decode_op_response_status, decode_status, PvaPacket,
-    PvaPacketCommand, PvaStatus,
+    decode_op_response_status as codec_decode_op_response_status, PvaPacket, PvaPacketCommand,
 };
 pub use spvirit_codec::spvirit_encode::{
     encode_create_channel_request, encode_get_field_request, encode_get_request,
@@ -26,11 +25,10 @@ pub fn build_client_validation(
     encode_client_connection_validation(87_040, 32_767, 0, "ca", &user, &host, version, is_be)
 }
 
-pub fn decode_put_status(raw: &[u8], is_be: bool) -> Option<PvaStatus> {
-    decode_status(raw, is_be).0
-}
-
-pub fn op_response_status(raw: &[u8], is_be: bool) -> Result<Option<PvaStatus>, PvGetError> {
+pub fn op_response_status(
+    raw: &[u8],
+    is_be: bool,
+) -> Result<Option<spvirit_codec::epics_decode::PvaStatus>, PvGetError> {
     codec_decode_op_response_status(raw, is_be).map_err(PvGetError::Protocol)
 }
 
@@ -44,14 +42,6 @@ pub fn ensure_status_ok(raw: &[u8], is_be: bool, step: &str) -> Result<(), PvGet
             st.message.unwrap_or_else(|| format!("code={}", st.code))
         ))),
     }
-}
-
-pub fn is_pva_status_error(status: Option<&PvaStatus>) -> bool {
-    status.is_some_and(PvaStatus::is_error)
-}
-
-pub fn format_pva_status(status: &PvaStatus) -> String {
-    status.to_string()
 }
 
 pub struct ChannelConn {
@@ -114,11 +104,11 @@ pub async fn establish_channel(
     ))?;
     let sid = match cmd {
         PvaPacketCommand::CreateChannel(payload) => {
-            if is_pva_status_error(payload.status.as_ref()) {
+            if payload.status.as_ref().is_some_and(|s| s.is_error()) {
                 let detail = payload
                     .status
                     .as_ref()
-                    .map(format_pva_status)
+                    .map(ToString::to_string)
                     .unwrap_or_default();
                 return Err(PvGetError::Protocol(format!(
                     "create_channel error: {}",
@@ -224,7 +214,7 @@ pub async fn pvget(opts: &PvGetOptions) -> Result<PvGetResult, PvGetError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
+    use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand, PvaStatus};
 
     #[test]
     fn encode_decode_monitor_request_roundtrip() {
@@ -301,8 +291,8 @@ mod tests {
             message: Some("bad".to_string()),
             stack: None,
         };
-        assert!(!is_pva_status_error(None));
-        assert!(!is_pva_status_error(Some(&ok)));
-        assert!(is_pva_status_error(Some(&err)));
+        assert!(!None::<&PvaStatus>.is_some_and(|s| s.is_error()));
+        assert!(!Some(&ok).is_some_and(|s| s.is_error()));
+        assert!(Some(&err).is_some_and(|s| s.is_error()));
     }
 }

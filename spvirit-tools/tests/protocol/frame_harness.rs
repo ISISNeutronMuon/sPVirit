@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::net::{SocketAddr, TcpListener, TcpStream as StdTcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};

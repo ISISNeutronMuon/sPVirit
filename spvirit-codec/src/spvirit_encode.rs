@@ -1,6 +1,6 @@
 //! PVA message encoding helpers.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use spvirit_types::{NtPayload, NtScalar};
 use crate::spvd_decode::StructureDesc;
 use crate::spvd_encode::{
@@ -901,6 +901,10 @@ pub fn ip_from_bytes(addr: &[u8; 16]) -> Option<IpAddr> {
     Some(IpAddr::V6(Ipv6Addr::from(*addr)))
 }
 
+pub fn socket_addr_from_pva_bytes(addr: [u8; 16], port: u16) -> Option<SocketAddr> {
+    ip_from_bytes(&addr).map(|ip| SocketAddr::new(ip, port))
+}
+
 /// Format a 16-byte PVA address field as a human-readable IP string.
 ///
 /// All-zeros → `"0.0.0.0"`, IPv4-mapped → dotted-quad, otherwise IPv6 notation.
@@ -1214,5 +1218,28 @@ mod tests {
             }
             other => panic!("unexpected decode: {:?}", other),
         }
+    }
+
+    #[test]
+    fn socket_addr_from_pva_bytes_decodes_ipv4_mapped() {
+        let addr = ip_to_bytes(IpAddr::V4(Ipv4Addr::new(10, 20, 30, 40)));
+        assert_eq!(
+            socket_addr_from_pva_bytes(addr, 5075),
+            Some("10.20.30.40:5075".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn socket_addr_from_pva_bytes_decodes_ipv6() {
+        let addr = ip_to_bytes(IpAddr::V6("2001:db8::1".parse().unwrap()));
+        assert_eq!(
+            socket_addr_from_pva_bytes(addr, 5075),
+            Some("[2001:db8::1]:5075".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn socket_addr_from_pva_bytes_returns_none_for_unspecified() {
+        assert_eq!(socket_addr_from_pva_bytes([0u8; 16], 5075), None);
     }
 }

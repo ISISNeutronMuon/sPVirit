@@ -1011,7 +1011,7 @@ impl PvaBeaconPayload {
         let (protocol, len) = decode_string(&raw[34..], is_be)?;
         let protocol = protocol;
         let server_status_if = if len > 0 {
-            let (server_status_if, len) = decode_string(&raw[34 + len..], is_be)?;
+            let (server_status_if, _server_status_len) = decode_string(&raw[34 + len..], is_be)?;
             server_status_if
         } else {
             String::new()
@@ -1297,7 +1297,7 @@ impl PvaOpPayload {
             return None;
         }
 
-        let (sid_or_cid, ioid, subcmd, mut offset) = if is_server {
+        let (sid_or_cid, ioid, subcmd, offset) = if is_server {
             // server op: ioid(4), subcmd(1)
             if raw.len() < 5 {
                 return None;
