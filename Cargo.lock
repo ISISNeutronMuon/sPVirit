@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "spvirit-codec"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "hex",
  "spvirit-types",
@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "spvirit-tools"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "argparse",
  "chrono",
@@ -841,7 +841,7 @@ dependencies = [
 
 [[package]]
 name = "spvirit-types"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "static_assertions"
