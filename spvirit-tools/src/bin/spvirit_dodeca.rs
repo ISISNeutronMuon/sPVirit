@@ -767,8 +767,8 @@ async fn handle_connection(
                 let ioids: Vec<u32> = conn_state
                     .ioid_to_sid
                     .iter()
-                    .filter(|(_, &s)| s == dc.sid)
-                    .map(|(&i, _)| i)
+                    .filter(|(_, s)| **s == dc.sid)
+                    .map(|(i, _)| *i)
                     .collect();
                 for ioid in &ioids {
                     conn_state.ioid_to_desc.remove(ioid);
