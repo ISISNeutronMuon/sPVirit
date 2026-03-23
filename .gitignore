@@ -2,9 +2,6 @@
 /target/
 **/target/
 
-# Cargo lock for libraries (keep it if you want reproducible builds)
-# Cargo.lock
-
 # IDE / Editor
 .vscode/
 !.vscode/settings.json
@@ -14,11 +11,6 @@
 *.swp
 *.swo
 *~
-
-# OS files
-Thumbs.db
-Desktop.ini
-.DS_Store
 
 # Debug / temporary
 tmp/

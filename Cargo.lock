@@ -591,40 +591,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pva-codec"
-version = "0.1.0"
-dependencies = [
- "hex",
- "pva-types",
- "tracing",
-]
-
-[[package]]
-name = "pva-tools"
-version = "0.1.0"
-dependencies = [
- "argparse",
- "chrono",
- "color-eyre",
- "dns-lookup",
- "get_if_addrs",
- "hex",
- "pva-codec",
- "pva-types",
- "ratatui",
- "regex",
- "serde_json",
- "socket2 0.5.10",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "pva-types"
-version = "0.1.0"
-
-[[package]]
 name = "quote"
 version = "1.0.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -842,6 +808,40 @@ dependencies = [
  "libc",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "spvirit-codec"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "spvirit-types",
+ "tracing",
+]
+
+[[package]]
+name = "spvirit-tools"
+version = "0.1.0"
+dependencies = [
+ "argparse",
+ "chrono",
+ "color-eyre",
+ "dns-lookup",
+ "get_if_addrs",
+ "hex",
+ "ratatui",
+ "regex",
+ "serde_json",
+ "socket2 0.5.10",
+ "spvirit-codec",
+ "spvirit-types",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "spvirit-types"
+version = "0.1.0"
 
 [[package]]
 name = "static_assertions"

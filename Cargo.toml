@@ -1,3 +1,3 @@
 [workspace]
-members = ["pva-types", "pva-codec", "pva-tools"]
+members = ["spvirit-types", "spvirit-codec", "spvirit-tools"]
 resolver = "2"

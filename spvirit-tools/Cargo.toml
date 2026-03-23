@@ -1,0 +1,87 @@
+[package]
+name = "spvirit-tools"
+version = "0.1.0"
+edition = "2021"
+description = "PVAccess client/server tools for EPICS"
+license = "GPL-3.0-or-later"
+repository = "https://gitlab.stfc.ac.uk/isis-accelerator-controls/playground/mateusz-leputa/epics-monitor-rust"
+readme = "../../README.md"
+
+[features]
+default = ["client", "server", "tui"]
+client = []
+server = []
+tui = ["dep:ratatui", "dep:color-eyre"]
+
+[dependencies]
+spvirit-types = { path = "../spvirit-types" }
+spvirit-codec = { path = "../spvirit-codec" }
+
+tokio = { version = "1.47.1", features = ["full"] }
+tracing = "0.1.41"
+tracing-subscriber = "0.3.20"
+chrono = "0.4"
+serde_json = "1.0.145"
+regex = "1.11.2"
+dns-lookup = "3.0.0"
+get_if_addrs = "0.5.3"
+hex = "0.4.3"
+socket2 = { version = "0.5", features = ["all"] }
+argparse = "0.2.2"
+ratatui = { version = "0.29.0", optional = true }
+color-eyre = { version = "0.6.5", optional = true }
+
+[[bin]]
+name = "spvirit_get"
+path = "src/bin/spvirit_get.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "spvirit_monitor"
+path = "src/bin/spvirit_monitor.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "spvirit_put"
+path = "src/bin/spvirit_put.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "spvirit_sine"
+path = "src/bin/spvirit_sine.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "spvirit_info"
+path = "src/bin/spvirit_info.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "spvirit_explore"
+path = "src/bin/spvirit_explore.rs"
+required-features = ["client", "tui"]
+
+[[bin]]
+name = "spvirit_list"
+path = "src/bin/spvirit_list.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "spvirit_server"
+path = "src/bin/spvirit_server.rs"
+required-features = ["server"]
+
+[[bin]]
+name = "spvirit_dodeca"
+path = "src/bin/spvirit_dodeca.rs"
+required-features = ["server"]
+
+[[bin]]
+name = "spvirit_search"
+path = "src/bin/spvirit_search.rs"
+required-features = ["client", "tui"]
+
+[[bin]]
+name = "spvirit_get_compare"
+path = "src/bin/spvirit_get_compare.rs"
+required-features = ["client"]

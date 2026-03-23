@@ -1,0 +1,13 @@
+[package]
+name = "spvirit-codec"
+version = "0.1.0"
+edition = "2021"
+description = "PVAccess protocol encode/decode and connection state tracking."
+license = "BSD3-Clause"
+repository = "https://github.com/ISISNeutronMuon/spvirit"
+readme = "../../README.md"
+
+[dependencies]
+spvirit-types = { path = "../spvirit-types" }
+hex = "0.4.3"
+tracing = "0.1.41"

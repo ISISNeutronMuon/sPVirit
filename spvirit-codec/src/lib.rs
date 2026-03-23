@@ -1,0 +1,34 @@
+//! PVAccess protocol encode/decode and connection state tracking.
+//!
+//! This crate provides the low-level PVA wire-format codec (encode + decode),
+//! PVD (pvData) structure codec, and PVA connection state tracking.
+//!
+//! Commonly used types are re-exported at the crate root for convenience.
+//! The full module paths remain available for less common items.
+
+pub mod encode_common;
+pub mod epics_decode;
+pub mod spvirit_encode;
+pub mod spvirit_state;
+pub mod spvd_decode;
+pub mod spvd_encode;
+
+// --- Re-exports: PVA wire-format decode types ---
+pub use epics_decode::{
+    decode_string, PvaCommands, PvaHeader, PvaPacket, PvaPacketCommand, PvaStatus,
+};
+
+// --- Re-exports: PVA wire-format encode helpers ---
+pub use spvirit_encode::{encode_control_message, encode_header, format_pva_address, ip_from_bytes, ip_to_bytes};
+
+// --- Re-exports: connection state tracking ---
+pub use spvirit_state::{ConnectionKey, PvaStateConfig, PvaStateStats, PvaStateTracker};
+
+// --- Re-exports: pvData structure decode ---
+pub use spvd_decode::{DecodedValue, FieldDesc, FieldType, PvdDecoder, StructureDesc, TypeCode};
+
+// --- Re-exports: pvData structure encode ---
+pub use spvd_encode::encode_structure_desc;
+
+// --- Re-export the types crate for convenience ---
+pub use spvirit_types;

@@ -1,0 +1,10 @@
+[package]
+name = "spvirit-types"
+version = "0.1.0"
+edition = "2021"
+description = "Shared PVAccess Normative Type (NT) data model types."
+license = "BSD3-Clause"
+repository = "https://github.com/ISISNeutronMuon/spvirit"
+readme = "../../README.md"
+
+[dependencies]
