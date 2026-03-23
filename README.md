@@ -148,6 +148,10 @@ cargo run --example decode_packet -p spvirit-codec       # self-contained, no IO
 | `spvirit_sine` |  | Continuously write a sine wave to a PV (demo/testing) |
 | `spvirit_dodeca` |  | Server publishing a rotating 3D dodecahedron as an NTNDArray PV |
 
+## Server (softIOC like experiment)
+
+While not a full softIOC implementation, `spvirit_server` is a simple PVAccess server that can serve some static PVs and parse a limited subset of EPICS db file syntax. It proves that the encoding/decoding and connection handling logic in `spvirit-codec` is sufficient to implement a server, and it can be used as a starting for a more full featured softIOC in the future.
+
 ## Related Projects
 
 - [spvirit-scry](https://crates.io/crates/spvirit-scry) — A Rust tool for capturing and analyzing pvAccess EPICS packets.
