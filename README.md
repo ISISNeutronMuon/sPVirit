@@ -7,7 +7,11 @@
 
 */ˈspɪrɪt/ of the Machine* 
 
-Spvirit is a Rust library for working with EPICS PVAccess protocol, including encoding/decoding and connection state tracking. It also includes tools for monitoring and testing PVAccess connections. These are more proof of concept than production ready, but they are available for anyone to use and contribute to.
+Spvirit is a Rust library for working with EPICS PVAccess protocol, including encoding/decoding and connection state tracking. It also includes tools for monitoring and testing PVAccess connections. These are not yet production ready , but they are available for anyone to use and contribute to.
+
+Key areas of development in the near future include:
+- More complete support for EPICS Normative Types (NT) and their associated metadata.
+- softIOC-like server functionality, including parsing of EPICS db files and support for more complex PV types and behaviors, a prototype of which is already available in the `spvirit_server` tool.
 
 ## Why Rust? 
 
@@ -128,8 +132,8 @@ fn main() {
 
 See the [`examples/`](spvirit-tools/examples) folders for runnable versions of each snippet:
 ```bash
-cargo run --example pvget_example -p spvirit-tools       # requires a running IOC
-cargo run --example search_example -p spvirit-tools      # requires a running IOC
+cargo run --example pvget_example -p spvirit-tools MY:PV:NAME      # requires a running IOC
+cargo run --example search_example -p spvirit-tools MY:PV:NAME     # requires a running IOC
 cargo run --example decode_packet -p spvirit-codec       # self-contained, no IOC needed
 ```
 
@@ -150,7 +154,13 @@ cargo run --example decode_packet -p spvirit-codec       # self-contained, no IO
 
 ## Server (softIOC like experiment)
 
-While not a full softIOC implementation, `spvirit_server` is a simple PVAccess server that can serve some static PVs and parse a limited subset of EPICS db file syntax. It proves that the encoding/decoding and connection handling logic in `spvirit-codec` is sufficient to implement a server, and it can be used as a starting for a more full featured softIOC in the future.
+While not a full softIOC implementation, `spvirit_server` is a simple PVAccess server that can serve some static PVs and parse a limited subset of EPICS db file syntax. It proves that the encoding/decoding and connection handling logic in `spvirit-codec` is sufficient to implement a server, and it can be used as a starting for a more full featured softIOC in the future. (hint hint PRs welcome :))
+
+## Integration test matrix 
+I have tested the tools in this repo against the following EPICS PVAccess servers:
+- EPICS 
+- p4p (pvxs under the hood)
+- PvAccessJava
 
 ## Related Projects
 
