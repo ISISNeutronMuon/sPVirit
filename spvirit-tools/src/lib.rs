@@ -13,7 +13,7 @@ pub mod spvirit_server;
 
 // --- Re-exports: client core ---
 pub use spvirit_client::client::{build_client_validation, pvget};
-pub use spvirit_client::search::{search_pv, SearchTarget};
+pub use spvirit_client::search::{build_auto_broadcast_targets, search_pv, SearchTarget};
 pub use spvirit_client::transport::read_packet;
 pub use spvirit_client::types::{PvGetError, PvGetOptions, PvGetResult};
 pub use spvirit_client::format::{format_output, OutputFormat, RenderOptions};
