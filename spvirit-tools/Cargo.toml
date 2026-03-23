@@ -6,6 +6,9 @@ description = "PVAccess client/server tools for EPICS"
 license = "GPL-3.0-or-later"
 repository = "https://gitlab.stfc.ac.uk/isis-accelerator-controls/playground/mateusz-leputa/epics-monitor-rust"
 readme = "../../README.md"
+keywords = ["epics", "pvaccess"]  
+categories = ["science"]
+authors = ["Mateusz Leputa for ISIS Neutron and Muon Source Copyright 2026"]
 
 [features]
 default = ["client", "server", "tui"]
