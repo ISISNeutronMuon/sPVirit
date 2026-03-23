@@ -174,3 +174,12 @@ I used the following libraries and repos as refernce materials for PVAccess prot
 - [pvAccess Protocol Specification](https://docs.epics-controls.org/en/latest/pv-access/protocol.html)
 - [EPICS Base](https://github.com/epics-base/epics-base)
 - [PVAshark](https://github.com/george-mcintyre/pvashark)
+
+## GenAI Usage Log
+
+| Section / Area | What Was Done With AI | Plans Ahead |
+|---|---|---|
+| `spvirit-types` | Hand coded, few types completed with AI, the prettified with AI | keep the same, fairly complete |
+| `spvirit-codec` | Most was hand-coded, some restructuring and prettifying was done with AI.  | keep the same, bring in any common helpers, maybe write a siplified API for users |
+| `spvirit-tools` | Mostly AI generated, manually coded parts of Put an Get then let the Agents build on top. | Need to split it out into spvirit-IOC/server/client utils and the like to idiomatically conform to EPICS-base/pvxs client/servers. They do work and are ineter-op tested against other EPICS PVA implementations in C++/Java but don't have super clean/intuitive API's at the moment. |
+| Testing | I wrote some basic tests, then used GenAI agents to generate more tests and test cases, which I then manually curated and edited. | Suite is fairly comprehensive so I will keep it as is. |
