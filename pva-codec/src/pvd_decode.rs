@@ -1,0 +1,1384 @@
+//! PVD (pvData) Type Introspection and Value Decoding
+//!
+//! Implements parsing of PVAccess field descriptions and value decoding
+//! according to the pvData serialization specification.
+
+use std::fmt;
+use tracing::debug;
+
+/// PVD type codes from the specification
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeCode {
+    Null = 0xFF,
+    Boolean = 0x00,
+    Int8 = 0x20,
+    Int16 = 0x21,
+    Int32 = 0x22,
+    Int64 = 0x23,
+    UInt8 = 0x24,
+    UInt16 = 0x25,
+    UInt32 = 0x26,
+    UInt64 = 0x27,
+    Float32 = 0x42,
+    Float64 = 0x43,
+    String = 0x60,
+    // Bounded string has 0x83 prefix followed by size
+    Variant = 0xFE, // Union with no fixed type (0xFF is Null)
+}
+
+impl TypeCode {
+    pub fn from_byte(b: u8) -> Option<Self> {
+        // Clear scalar-array mode bits (variable/bounded/fixed array)
+        let base = b & 0xE7;
+        match base {
+            0x00 => Some(TypeCode::Boolean),
+            0x20 => Some(TypeCode::Int8),
+            0x21 => Some(TypeCode::Int16),
+            0x22 => Some(TypeCode::Int32),
+            0x23 => Some(TypeCode::Int64),
+            0x24 => Some(TypeCode::UInt8),
+            0x25 => Some(TypeCode::UInt16),
+            0x26 => Some(TypeCode::UInt32),
+            0x27 => Some(TypeCode::UInt64),
+            0x42 => Some(TypeCode::Float32),
+            0x43 => Some(TypeCode::Float64),
+            0x60 => Some(TypeCode::String),
+            _ => None,
+        }
+    }
+
+    pub fn size(&self) -> Option<usize> {
+        match self {
+            TypeCode::Boolean | TypeCode::Int8 | TypeCode::UInt8 => Some(1),
+            TypeCode::Int16 | TypeCode::UInt16 => Some(2),
+            TypeCode::Int32 | TypeCode::UInt32 | TypeCode::Float32 => Some(4),
+            TypeCode::Int64 | TypeCode::UInt64 | TypeCode::Float64 => Some(8),
+            TypeCode::String | TypeCode::Null | TypeCode::Variant => None,
+        }
+    }
+}
+
+/// Field type description
+#[derive(Debug, Clone)]
+pub enum FieldType {
+    Scalar(TypeCode),
+    ScalarArray(TypeCode),
+    String,
+    StringArray,
+    Structure(StructureDesc),
+    StructureArray(StructureDesc),
+    Union(Vec<FieldDesc>),
+    UnionArray(Vec<FieldDesc>),
+    Variant,
+    VariantArray,
+    BoundedString(u32),
+}
+
+impl FieldType {
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            FieldType::Scalar(tc) => match tc {
+                TypeCode::Boolean => "boolean",
+                TypeCode::Int8 => "byte",
+                TypeCode::Int16 => "short",
+                TypeCode::Int32 => "int",
+                TypeCode::Int64 => "long",
+                TypeCode::UInt8 => "ubyte",
+                TypeCode::UInt16 => "ushort",
+                TypeCode::UInt32 => "uint",
+                TypeCode::UInt64 => "ulong",
+                TypeCode::Float32 => "float",
+                TypeCode::Float64 => "double",
+                TypeCode::String => "string",
+                _ => "unknown",
+            },
+            FieldType::ScalarArray(tc) => match tc {
+                TypeCode::Float64 => "double[]",
+                TypeCode::Float32 => "float[]",
+                TypeCode::Int64 => "long[]",
+                TypeCode::Int32 => "int[]",
+                _ => "array",
+            },
+            FieldType::String => "string",
+            FieldType::StringArray => "string[]",
+            FieldType::Structure(_) => "structure",
+            FieldType::StructureArray(_) => "structure[]",
+            FieldType::Union(_) => "union",
+            FieldType::UnionArray(_) => "union[]",
+            FieldType::Variant => "any",
+            FieldType::VariantArray => "any[]",
+            FieldType::BoundedString(_) => "string",
+        }
+    }
+}
+
+/// Field description (name + type)
+#[derive(Debug, Clone)]
+pub struct FieldDesc {
+    pub name: String,
+    pub field_type: FieldType,
+}
+
+/// Structure description with optional ID
+#[derive(Debug, Clone)]
+pub struct StructureDesc {
+    pub struct_id: Option<String>,
+    pub fields: Vec<FieldDesc>,
+}
+
+impl StructureDesc {
+    pub fn new() -> Self {
+        Self {
+            struct_id: None,
+            fields: Vec::new(),
+        }
+    }
+}
+
+impl Default for StructureDesc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Decoded value
+#[derive(Debug, Clone)]
+pub enum DecodedValue {
+    Null,
+    Boolean(bool),
+    Int8(i8),
+    Int16(i16),
+    Int32(i32),
+    Int64(i64),
+    UInt8(u8),
+    UInt16(u16),
+    UInt32(u32),
+    UInt64(u64),
+    Float32(f32),
+    Float64(f64),
+    String(String),
+    Array(Vec<DecodedValue>),
+    Structure(Vec<(String, DecodedValue)>),
+    Raw(Vec<u8>),
+}
+
+impl fmt::Display for DecodedValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DecodedValue::Null => write!(f, "null"),
+            DecodedValue::Boolean(v) => write!(f, "{}", v),
+            DecodedValue::Int8(v) => write!(f, "{}", v),
+            DecodedValue::Int16(v) => write!(f, "{}", v),
+            DecodedValue::Int32(v) => write!(f, "{}", v),
+            DecodedValue::Int64(v) => write!(f, "{}", v),
+            DecodedValue::UInt8(v) => write!(f, "{}", v),
+            DecodedValue::UInt16(v) => write!(f, "{}", v),
+            DecodedValue::UInt32(v) => write!(f, "{}", v),
+            DecodedValue::UInt64(v) => write!(f, "{}", v),
+            DecodedValue::Float32(v) => write!(f, "{:.6}", v),
+            DecodedValue::Float64(v) => write!(f, "{:.6}", v),
+            DecodedValue::String(v) => write!(f, "\"{}\"", v),
+            DecodedValue::Array(arr) => {
+                write!(f, "[")?;
+                for (i, v) in arr.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    if i >= 5 {
+                        write!(f, "... ({} total)", arr.len())?;
+                        break;
+                    }
+                    write!(f, "{}", v)?;
+                }
+                write!(f, "]")
+            }
+            DecodedValue::Structure(fields) => {
+                write!(f, "{{")?;
+                for (i, (name, val)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}={}", name, val)?;
+                }
+                write!(f, "}}")
+            }
+            DecodedValue::Raw(data) => {
+                if data.len() <= 8 {
+                    write!(f, "<{} bytes: {}>", data.len(), hex::encode(data))
+                } else {
+                    write!(f, "<{} bytes>", data.len())
+                }
+            }
+        }
+    }
+}
+
+/// PVD Decoder state
+pub struct PvdDecoder {
+    is_be: bool,
+}
+
+impl PvdDecoder {
+    pub fn new(is_be: bool) -> Self {
+        Self { is_be }
+    }
+
+    /// Decode a size value (PVA variable-length encoding)
+    pub fn decode_size(&self, data: &[u8]) -> Option<(usize, usize)> {
+        if data.is_empty() {
+            return None;
+        }
+        let first = data[0];
+        if first == 0xFF {
+            // Special: -1 (null)
+            return Some((0, 1)); // Treat as 0 for simplicity
+        }
+        if first < 254 {
+            return Some((first as usize, 1));
+        }
+        if first == 254 {
+            // 4-byte size follows
+            if data.len() < 5 {
+                return None;
+            }
+            let size = if self.is_be {
+                u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize
+            } else {
+                u32::from_le_bytes([data[1], data[2], data[3], data[4]]) as usize
+            };
+            return Some((size, 5));
+        }
+        // first == 255 is null marker, handled above.
+        None
+    }
+
+    /// Decode a string
+    pub fn decode_string(&self, data: &[u8]) -> Option<(String, usize)> {
+        let (size, size_bytes) = self.decode_size(data)?;
+        if size == 0 {
+            return Some((String::new(), size_bytes));
+        }
+        if data.len() < size_bytes + size {
+            return None;
+        }
+        let s = std::str::from_utf8(&data[size_bytes..size_bytes + size]).ok()?;
+        Some((s.to_string(), size_bytes + size))
+    }
+
+    /// Parse field description from introspection data
+    pub fn parse_field_desc(&self, data: &[u8]) -> Option<(FieldDesc, usize)> {
+        if data.is_empty() {
+            return None;
+        }
+
+        let mut offset = 0;
+
+        // Parse field name
+        let (name, consumed) = self.decode_string(&data[offset..])?;
+        offset += consumed;
+
+        if offset >= data.len() {
+            return None;
+        }
+
+        // Parse type descriptor
+        let (field_type, type_consumed) = self.parse_type_desc(&data[offset..])?;
+        offset += type_consumed;
+
+        Some((FieldDesc { name, field_type }, offset))
+    }
+
+    /// Parse type descriptor
+    fn parse_type_desc(&self, data: &[u8]) -> Option<(FieldType, usize)> {
+        if data.is_empty() {
+            return None;
+        }
+
+        let type_byte = data[0];
+        let mut offset = 1;
+
+        // Check for NULL type
+        if type_byte == 0xFF {
+            return Some((FieldType::Variant, 1));
+        }
+
+        // Full-with-id from IntrospectionRegistry:
+        // 0xFD + int16 key + type descriptor payload.
+        if type_byte == 0xFD {
+            if data.len() < 4 {
+                return None;
+            }
+            // Preferred parsing path: skip tag + int16 key.
+            if let Some((field_type, consumed)) = self.parse_type_desc(&data[3..]) {
+                return Some((field_type, 3 + consumed));
+            }
+            // Legacy fallback for older non-keyed streams.
+            if let Some((field_type, consumed)) = self.parse_type_desc(&data[1..]) {
+                return Some((field_type, 1 + consumed));
+            }
+            return None;
+        }
+
+        // Only-id from IntrospectionRegistry:
+        // 0xFE + int16 key, requires connection-level registry state.
+        if type_byte == 0xFE {
+            debug!("Type descriptor uses ONLY_ID (0xFE) without registry context");
+            return None;
+        }
+
+        // Check for structure (0x80) or structure array (0x88)
+        if type_byte == 0x80 || type_byte == 0x88 {
+            let is_array = (type_byte & 0x08) != 0;
+            if is_array {
+                // Skip the inner structure element tag (0x80)
+                if offset >= data.len() || data[offset] != 0x80 {
+                    return None;
+                }
+                offset += 1;
+            }
+            let (struct_desc, consumed) = self.parse_structure_desc(&data[offset..])?;
+            offset += consumed;
+            if is_array {
+                return Some((FieldType::StructureArray(struct_desc), offset));
+            } else {
+                return Some((FieldType::Structure(struct_desc), offset));
+            }
+        }
+
+        // Check for union (0x81) or union array (0x89)
+        if type_byte == 0x81 || type_byte == 0x89 {
+            let is_array = (type_byte & 0x08) != 0;
+            if is_array {
+                // Skip the inner union element tag (0x81)
+                if offset >= data.len() || data[offset] != 0x81 {
+                    return None;
+                }
+                offset += 1;
+            }
+            // Parse union fields (same as structure)
+            let (struct_desc, consumed) = self.parse_structure_desc(&data[offset..])?;
+            offset += consumed;
+            if is_array {
+                return Some((FieldType::UnionArray(struct_desc.fields), offset));
+            } else {
+                return Some((FieldType::Union(struct_desc.fields), offset));
+            }
+        }
+
+        // Check for variant/any (0x82) or variant array (0x8A)
+        if type_byte == 0x82 {
+            return Some((FieldType::Variant, 1));
+        }
+        if type_byte == 0x8A {
+            return Some((FieldType::VariantArray, 1));
+        }
+
+        // Check for bounded string (0x83, legacy 0x86 accepted for compatibility)
+        if type_byte == 0x83 || type_byte == 0x86 {
+            let (bound, consumed) = self.decode_size(&data[offset..])?;
+            offset += consumed;
+            return Some((FieldType::BoundedString(bound as u32), offset));
+        }
+
+        // Scalar / scalar-array with mode bits:
+        // 0x00=not-array, 0x08=variable, 0x10=bounded, 0x18=fixed
+        let scalar_or_array = type_byte & 0x18;
+        let is_array = scalar_or_array != 0;
+        if is_array && scalar_or_array != 0x08 {
+            // Consume bounded/fixed max length for alignment, even if we don't model it.
+            let (_bound, consumed) = self.decode_size(&data[offset..])?;
+            offset += consumed;
+        }
+        let base_type = type_byte & 0xE7;
+
+        // String type
+        if base_type == 0x60 {
+            if is_array {
+                return Some((FieldType::StringArray, offset));
+            } else {
+                return Some((FieldType::String, offset));
+            }
+        }
+
+        // Numeric types
+        if let Some(tc) = TypeCode::from_byte(base_type) {
+            if is_array {
+                return Some((FieldType::ScalarArray(tc), offset));
+            } else {
+                return Some((FieldType::Scalar(tc), offset));
+            }
+        }
+
+        debug!("Unknown type byte: 0x{:02x}", type_byte);
+        None
+    }
+
+    /// Parse structure description
+    fn parse_structure_desc(&self, data: &[u8]) -> Option<(StructureDesc, usize)> {
+        let mut offset = 0;
+
+        // Parse optional struct ID
+        let (struct_id, consumed) = self.decode_string(&data[offset..])?;
+        offset += consumed;
+
+        let struct_id = if struct_id.is_empty() {
+            None
+        } else {
+            Some(struct_id)
+        };
+
+        // Parse field count
+        let (field_count, consumed) = self.decode_size(&data[offset..])?;
+        offset += consumed;
+
+        let mut fields = Vec::with_capacity(field_count);
+
+        for _ in 0..field_count {
+            if offset >= data.len() {
+                break;
+            }
+            if let Some((field, consumed)) = self.parse_field_desc(&data[offset..]) {
+                offset += consumed;
+                fields.push(field);
+            } else {
+                break;
+            }
+        }
+
+        Some((StructureDesc { struct_id, fields }, offset))
+    }
+
+    /// Parse the full type introspection from INIT response
+    pub fn parse_introspection(&self, data: &[u8]) -> Option<StructureDesc> {
+        self.parse_introspection_with_len(data)
+            .map(|(desc, _)| desc)
+    }
+
+    /// Parse full type introspection and return consumed bytes.
+    pub fn parse_introspection_with_len(&self, data: &[u8]) -> Option<(StructureDesc, usize)> {
+        if data.is_empty() {
+            return None;
+        }
+
+        // The introspection starts with a type byte
+        let type_byte = data[0];
+
+        // Should be a structure (0x80)
+        if type_byte == 0x80 {
+            let (desc, consumed) = self.parse_structure_desc(&data[1..])?;
+            return Some((desc, 1 + consumed));
+        }
+
+        // Full-with-id from IntrospectionRegistry:
+        // 0xFD + int16 key + field type descriptor payload.
+        if type_byte == 0xFD {
+            if data.len() < 4 {
+                return None;
+            }
+            // Preferred parsing path: skip tag + int16 key.
+            if let Some((desc, consumed)) = self.parse_introspection_with_len(&data[3..]) {
+                return Some((desc, 3 + consumed));
+            }
+            // Legacy fallback for older non-keyed streams.
+            if let Some((desc, consumed)) = self.parse_introspection_with_len(&data[1..]) {
+                return Some((desc, 1 + consumed));
+            }
+            return None;
+        }
+
+        // Only-id from IntrospectionRegistry:
+        // 0xFE + int16 key, requires connection-level registry state.
+        if type_byte == 0xFE {
+            debug!(
+                "Introspection uses ONLY_ID (0xFE), but no registry is available in this decoder"
+            );
+            return None;
+        }
+
+        debug!("Unexpected introspection type byte: 0x{:02x}", type_byte);
+        None
+    }
+
+    /// Decode a scalar value
+    fn decode_scalar(&self, data: &[u8], tc: TypeCode) -> Option<(DecodedValue, usize)> {
+        let size = tc.size()?;
+        if data.len() < size {
+            return None;
+        }
+
+        let value = match tc {
+            TypeCode::Boolean => DecodedValue::Boolean(data[0] != 0),
+            TypeCode::Int8 => DecodedValue::Int8(data[0] as i8),
+            TypeCode::UInt8 => DecodedValue::UInt8(data[0]),
+            TypeCode::Int16 => {
+                let v = if self.is_be {
+                    i16::from_be_bytes([data[0], data[1]])
+                } else {
+                    i16::from_le_bytes([data[0], data[1]])
+                };
+                DecodedValue::Int16(v)
+            }
+            TypeCode::UInt16 => {
+                let v = if self.is_be {
+                    u16::from_be_bytes([data[0], data[1]])
+                } else {
+                    u16::from_le_bytes([data[0], data[1]])
+                };
+                DecodedValue::UInt16(v)
+            }
+            TypeCode::Int32 => {
+                let v = if self.is_be {
+                    i32::from_be_bytes(data[0..4].try_into().unwrap())
+                } else {
+                    i32::from_le_bytes(data[0..4].try_into().unwrap())
+                };
+                DecodedValue::Int32(v)
+            }
+            TypeCode::UInt32 => {
+                let v = if self.is_be {
+                    u32::from_be_bytes(data[0..4].try_into().unwrap())
+                } else {
+                    u32::from_le_bytes(data[0..4].try_into().unwrap())
+                };
+                DecodedValue::UInt32(v)
+            }
+            TypeCode::Int64 => {
+                let v = if self.is_be {
+                    i64::from_be_bytes(data[0..8].try_into().unwrap())
+                } else {
+                    i64::from_le_bytes(data[0..8].try_into().unwrap())
+                };
+                DecodedValue::Int64(v)
+            }
+            TypeCode::UInt64 => {
+                let v = if self.is_be {
+                    u64::from_be_bytes(data[0..8].try_into().unwrap())
+                } else {
+                    u64::from_le_bytes(data[0..8].try_into().unwrap())
+                };
+                DecodedValue::UInt64(v)
+            }
+            TypeCode::Float32 => {
+                let v = if self.is_be {
+                    f32::from_be_bytes(data[0..4].try_into().unwrap())
+                } else {
+                    f32::from_le_bytes(data[0..4].try_into().unwrap())
+                };
+                DecodedValue::Float32(v)
+            }
+            TypeCode::Float64 => {
+                let v = if self.is_be {
+                    f64::from_be_bytes(data[0..8].try_into().unwrap())
+                } else {
+                    f64::from_le_bytes(data[0..8].try_into().unwrap())
+                };
+                DecodedValue::Float64(v)
+            }
+            _ => return None,
+        };
+
+        Some((value, size))
+    }
+
+    /// Decode value according to field type
+    pub fn decode_value(
+        &self,
+        data: &[u8],
+        field_type: &FieldType,
+    ) -> Option<(DecodedValue, usize)> {
+        match field_type {
+            FieldType::Scalar(tc) => self.decode_scalar(data, *tc),
+            FieldType::String | FieldType::BoundedString(_) => {
+                let (s, consumed) = self.decode_string(data)?;
+                Some((DecodedValue::String(s), consumed))
+            }
+            FieldType::ScalarArray(tc) => {
+                let (count, size_consumed) = self.decode_size(data)?;
+                let mut offset = size_consumed;
+                let limit = count.min(4_000_000);
+                let mut values = Vec::with_capacity(limit);
+                let elem_size = tc.size().unwrap_or(1);
+                for _ in 0..limit {
+                    if let Some((val, consumed)) = self.decode_scalar(&data[offset..], *tc) {
+                        values.push(val);
+                        offset += consumed;
+                    } else {
+                        break;
+                    }
+                }
+                // Skip past any remaining elements we didn't store, so the
+                // stream stays aligned for the next field.
+                let remaining = count.saturating_sub(limit);
+                offset += remaining * elem_size;
+                Some((DecodedValue::Array(values), offset))
+            }
+            FieldType::StringArray => {
+                let (count, size_consumed) = self.decode_size(data)?;
+                let mut offset = size_consumed;
+                let max_items = count.min(4096);
+                let mut values = Vec::with_capacity(max_items);
+                for _ in 0..max_items {
+                    if let Some((s, consumed)) = self.decode_string(&data[offset..]) {
+                        values.push(DecodedValue::String(s));
+                        offset += consumed;
+                    } else {
+                        break;
+                    }
+                }
+                Some((DecodedValue::Array(values), offset))
+            }
+            FieldType::Structure(desc) => self.decode_structure(data, desc),
+            FieldType::StructureArray(desc) => {
+                let (count, size_consumed) = self.decode_size(data)?;
+                let mut offset = size_consumed;
+                let mut values = Vec::with_capacity(count.min(256));
+                for _ in 0..count.min(256) {
+                    // Read per-element null indicator (0 = null, non-zero = present)
+                    if offset >= data.len() {
+                        return None;
+                    }
+                    let null_indicator = data[offset];
+                    offset += 1;
+                    if null_indicator == 0 {
+                        // null element – push empty structure placeholder
+                        values.push(DecodedValue::Structure(Vec::new()));
+                        continue;
+                    }
+                    let (item, consumed) = self.decode_structure(&data[offset..], desc)?;
+                    values.push(item);
+                    offset += consumed;
+                }
+                Some((DecodedValue::Array(values), offset))
+            }
+            FieldType::Union(fields) => {
+                let (selector, consumed) = self.decode_size(data)?;
+                let field = fields.get(selector)?;
+                let (value, val_consumed) =
+                    self.decode_value(&data[consumed..], &field.field_type)?;
+                Some((
+                    DecodedValue::Structure(vec![(field.name.clone(), value)]),
+                    consumed + val_consumed,
+                ))
+            }
+            FieldType::UnionArray(fields) => {
+                let (count, size_consumed) = self.decode_size(data)?;
+                let mut offset = size_consumed;
+                let mut values = Vec::with_capacity(count.min(128));
+                for _ in 0..count.min(128) {
+                    let (selector, consumed) = self.decode_size(&data[offset..])?;
+                    offset += consumed;
+                    let field = fields.get(selector)?;
+                    let (value, val_consumed) =
+                        self.decode_value(&data[offset..], &field.field_type)?;
+                    offset += val_consumed;
+                    values.push(DecodedValue::Structure(vec![(field.name.clone(), value)]));
+                }
+                Some((DecodedValue::Array(values), offset))
+            }
+            FieldType::Variant => {
+                if data.is_empty() {
+                    return None;
+                }
+                if data[0] == 0xFF {
+                    return Some((DecodedValue::Null, 1));
+                }
+                let (variant_type, type_consumed) = self.parse_type_desc(data)?;
+                let (variant_value, value_consumed) =
+                    self.decode_value(&data[type_consumed..], &variant_type)?;
+                Some((variant_value, type_consumed + value_consumed))
+            }
+            FieldType::VariantArray => {
+                let (count, size_consumed) = self.decode_size(data)?;
+                let mut offset = size_consumed;
+                let mut values = Vec::with_capacity(count.min(128));
+                for _ in 0..count.min(128) {
+                    let (v, consumed) = self.decode_value(&data[offset..], &FieldType::Variant)?;
+                    values.push(v);
+                    offset += consumed;
+                }
+                Some((DecodedValue::Array(values), offset))
+            }
+        }
+    }
+
+    /// Decode a structure value using the field descriptions
+    pub fn decode_structure(
+        &self,
+        data: &[u8],
+        desc: &StructureDesc,
+    ) -> Option<(DecodedValue, usize)> {
+        let mut offset = 0;
+        let mut fields: Vec<(String, DecodedValue)> = Vec::new();
+
+        for field in &desc.fields {
+            if offset >= data.len() {
+                break;
+            }
+            if let Some((value, consumed)) = self.decode_value(&data[offset..], &field.field_type) {
+                fields.push((field.name.clone(), value));
+                offset += consumed;
+            } else {
+                // Can't decode this field, stop
+                break;
+            }
+        }
+
+        Some((DecodedValue::Structure(fields), offset))
+    }
+
+    /// Decode a structure with a bitset indicating which fields are present
+    /// This is used for delta updates in MONITOR
+    pub fn decode_structure_with_bitset(
+        &self,
+        data: &[u8],
+        desc: &StructureDesc,
+    ) -> Option<(DecodedValue, usize)> {
+        if data.is_empty() {
+            return None;
+        }
+
+        let mut offset = 0;
+
+        // Parse the bitset - PVA uses size-encoded bitset
+        let (bitset_size, size_consumed) = self.decode_size(data)?;
+        offset += size_consumed;
+
+        if bitset_size == 0 || offset + bitset_size > data.len() {
+            return Some((DecodedValue::Structure(vec![]), offset));
+        }
+
+        let bitset = &data[offset..offset + bitset_size];
+        offset += bitset_size;
+
+        let (value, consumed) =
+            self.decode_structure_with_bitset_body(&data[offset..], desc, bitset)?;
+        Some((value, offset + consumed))
+    }
+
+    /// Decode a structure with changed and overrun bitsets (MONITOR updates)
+    pub fn decode_structure_with_bitset_and_overrun(
+        &self,
+        data: &[u8],
+        desc: &StructureDesc,
+    ) -> Option<(DecodedValue, usize)> {
+        if data.is_empty() {
+            return None;
+        }
+        let mut offset = 0usize;
+        let (changed_size, consumed1) = self.decode_size(&data[offset..])?;
+        offset += consumed1;
+        if offset + changed_size > data.len() {
+            return None;
+        }
+        let changed = &data[offset..offset + changed_size];
+        offset += changed_size;
+
+        let (overrun_size, consumed2) = self.decode_size(&data[offset..])?;
+        offset += consumed2;
+        if offset + overrun_size > data.len() {
+            return None;
+        }
+        offset += overrun_size;
+
+        let (value, consumed) =
+            self.decode_structure_with_bitset_body(&data[offset..], desc, changed)?;
+        Some((value, offset + consumed))
+    }
+
+    /// Decode a structure with changed bitset, data, then overrun bitset (spec order)
+    pub fn decode_structure_with_bitset_then_overrun(
+        &self,
+        data: &[u8],
+        desc: &StructureDesc,
+    ) -> Option<(DecodedValue, usize)> {
+        if data.is_empty() {
+            return None;
+        }
+        let mut offset = 0usize;
+        let (changed_size, consumed1) = self.decode_size(&data[offset..])?;
+        offset += consumed1;
+        if offset + changed_size > data.len() {
+            return None;
+        }
+        let changed = &data[offset..offset + changed_size];
+        offset += changed_size;
+
+        let (value, consumed) =
+            self.decode_structure_with_bitset_body(&data[offset..], desc, changed)?;
+        offset += consumed;
+
+        let (overrun_size, consumed2) = self.decode_size(&data[offset..])?;
+        offset += consumed2;
+        if offset + overrun_size > data.len() {
+            return None;
+        }
+        offset += overrun_size;
+
+        Some((value, offset))
+    }
+
+    fn decode_structure_with_bitset_body(
+        &self,
+        data: &[u8],
+        desc: &StructureDesc,
+        bitset: &[u8],
+    ) -> Option<(DecodedValue, usize)> {
+        // Bit 0 is for the whole structure, field bits start at bit 1
+        debug!(
+            "Bitset: {:02x?} (size={}), total_fields={}",
+            bitset,
+            bitset.len(),
+            count_structure_fields(desc)
+        );
+        debug!(
+            "Structure fields: {:?}",
+            desc.fields.iter().map(|f| &f.name).collect::<Vec<_>>()
+        );
+
+        // Special case: bitset contains only bit0 (whole structure) and no field bits.
+        let mut has_field_bits = false;
+        if !bitset.is_empty() {
+            for (i, b) in bitset.iter().enumerate() {
+                let mask = if i == 0 { *b & !0x01 } else { *b };
+                if mask != 0 {
+                    has_field_bits = true;
+                    break;
+                }
+            }
+        }
+        if !has_field_bits && !bitset.is_empty() && (bitset[0] & 0x01) != 0 {
+            if let Some((value, consumed)) = self.decode_structure(data, desc) {
+                return Some((value, consumed));
+            }
+        }
+
+        let mut fields: Vec<(String, DecodedValue)> = Vec::new();
+        let mut offset = 0usize;
+
+        fn decode_with_bitset_recursive(
+            decoder: &PvdDecoder,
+            data: &[u8],
+            offset: &mut usize,
+            desc: &StructureDesc,
+            bitset: &[u8],
+            bit_offset: &mut usize,
+            fields: &mut Vec<(String, DecodedValue)>,
+        ) -> bool {
+            for field in &desc.fields {
+                let byte_idx = *bit_offset / 8;
+                let bit_idx = *bit_offset % 8;
+                let current_bit = *bit_offset;
+                *bit_offset += 1;
+
+                let field_present = if byte_idx < bitset.len() {
+                    (bitset[byte_idx] & (1 << bit_idx)) != 0
+                } else {
+                    false
+                };
+
+                debug!(
+                    "Field '{}' at bit {}: present={}",
+                    field.name, current_bit, field_present
+                );
+
+                if let FieldType::Structure(nested_desc) = &field.field_type {
+                    let child_start_bit = *bit_offset;
+                    let child_field_count = count_structure_fields(nested_desc);
+
+                    let mut any_child_bits_set = false;
+                    for i in 0..child_field_count {
+                        let check_byte = (child_start_bit + i) / 8;
+                        let check_bit = (child_start_bit + i) % 8;
+                        if check_byte < bitset.len() && (bitset[check_byte] & (1 << check_bit)) != 0
+                        {
+                            any_child_bits_set = true;
+                            break;
+                        }
+                    }
+
+                    debug!(
+                        "Nested structure '{}': parent_present={}, child_start_bit={}, child_count={}, any_child_bits_set={}",
+                        field.name, field_present, child_start_bit, child_field_count, any_child_bits_set
+                    );
+
+                    if field_present && !any_child_bits_set {
+                        *bit_offset += child_field_count;
+                        if *offset < data.len() {
+                            if let Some((value, consumed)) =
+                                decoder.decode_structure(&data[*offset..], nested_desc)
+                            {
+                                debug!(
+                                    "Decoded full nested structure '{}', consumed {} bytes",
+                                    field.name, consumed
+                                );
+                                fields.push((field.name.clone(), value));
+                                *offset += consumed;
+                            } else {
+                                debug!("Failed to decode full nested structure '{}'", field.name);
+                                return false;
+                            }
+                        }
+                    } else if any_child_bits_set {
+                        let mut nested_fields: Vec<(String, DecodedValue)> = Vec::new();
+                        if !decode_with_bitset_recursive(
+                            decoder,
+                            data,
+                            offset,
+                            nested_desc,
+                            bitset,
+                            bit_offset,
+                            &mut nested_fields,
+                        ) {
+                            return false;
+                        }
+                        debug!(
+                            "Nested structure '{}' decoded {} fields",
+                            field.name,
+                            nested_fields.len()
+                        );
+                        if !nested_fields.is_empty() {
+                            fields
+                                .push((field.name.clone(), DecodedValue::Structure(nested_fields)));
+                        }
+                    } else {
+                        *bit_offset += child_field_count;
+                    }
+                } else if field_present {
+                    if *offset >= data.len() {
+                        debug!(
+                            "Data exhausted at offset {} for field '{}'",
+                            *offset, field.name
+                        );
+                        return false;
+                    }
+                    if let Some((value, consumed)) =
+                        decoder.decode_value(&data[*offset..], &field.field_type)
+                    {
+                        fields.push((field.name.clone(), value));
+                        *offset += consumed;
+                    } else {
+                        return false;
+                    }
+                }
+            }
+            true
+        }
+
+        let mut bit_offset = 1;
+        decode_with_bitset_recursive(
+            self,
+            data,
+            &mut offset,
+            desc,
+            bitset,
+            &mut bit_offset,
+            &mut fields,
+        );
+        Some((DecodedValue::Structure(fields), offset))
+    }
+}
+
+/// Count total fields in a structure (including nested)
+fn count_structure_fields(desc: &StructureDesc) -> usize {
+    let mut count = 0;
+    for field in &desc.fields {
+        count += 1;
+        if let FieldType::Structure(nested) = &field.field_type {
+            count += count_structure_fields(nested);
+        }
+    }
+    count
+}
+
+/// Extract a sub-field from a StructureDesc by dot-separated path.
+/// Returns the sub-field as an owned StructureDesc. For leaf (non-structure)
+/// fields, returns a single-field StructureDesc wrapping the matched field.
+/// Returns the full desc if path is empty.
+pub fn extract_subfield_desc(desc: &StructureDesc, path: &str) -> Option<StructureDesc> {
+    if path.is_empty() {
+        return Some(desc.clone());
+    }
+    let mut parts = path.splitn(2, '.');
+    let head = parts.next()?;
+    let tail = parts.next().unwrap_or("");
+    for field in &desc.fields {
+        if field.name == head {
+            match &field.field_type {
+                FieldType::Structure(nested) | FieldType::StructureArray(nested) => {
+                    return extract_subfield_desc(nested, tail);
+                }
+                _ => {
+                    if tail.is_empty() {
+                        return Some(StructureDesc {
+                            struct_id: None,
+                            fields: vec![field.clone()],
+                        });
+                    }
+                    return None;
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Format a structure description for display
+pub fn format_structure_desc(desc: &StructureDesc) -> String {
+    let mut parts = Vec::new();
+    if let Some(ref id) = desc.struct_id {
+        parts.push(id.clone());
+    }
+    for field in &desc.fields {
+        parts.push(format!("{}:{}", field.name, field.field_type.type_name()));
+    }
+    parts.join(", ")
+}
+
+pub fn format_structure_tree(desc: &StructureDesc) -> String {
+    fn push_fields(out: &mut Vec<String>, fields: &[FieldDesc], indent: usize) {
+        let prefix = "  ".repeat(indent);
+        for field in fields {
+            match &field.field_type {
+                FieldType::Structure(nested) => {
+                    out.push(format!("{}{}: structure", prefix, field.name));
+                    push_fields(out, &nested.fields, indent + 1);
+                }
+                FieldType::StructureArray(nested) => {
+                    out.push(format!("{}{}: structure[]", prefix, field.name));
+                    push_fields(out, &nested.fields, indent + 1);
+                }
+                FieldType::Union(variants) => {
+                    out.push(format!("{}{}: union", prefix, field.name));
+                    push_fields(out, variants, indent + 1);
+                }
+                FieldType::UnionArray(variants) => {
+                    out.push(format!("{}{}: union[]", prefix, field.name));
+                    push_fields(out, variants, indent + 1);
+                }
+                FieldType::BoundedString(bound) => {
+                    out.push(format!("{}{}: string<={}", prefix, field.name, bound));
+                }
+                _ => {
+                    out.push(format!(
+                        "{}{}: {}",
+                        prefix,
+                        field.name,
+                        field.field_type.type_name()
+                    ));
+                }
+            }
+        }
+    }
+
+    let mut lines = Vec::new();
+    if let Some(id) = &desc.struct_id {
+        lines.push(format!("struct {}", id));
+    } else {
+        lines.push("struct <anonymous>".to_string());
+    }
+    push_fields(&mut lines, &desc.fields, 0);
+    lines.join("\n")
+}
+
+/// Extract the "value" field from a decoded NTScalar structure
+pub fn extract_nt_scalar_value(decoded: &DecodedValue) -> Option<&DecodedValue> {
+    if let DecodedValue::Structure(fields) = decoded {
+        for (name, value) in fields {
+            if name == "value" {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+/// Compact display of decoded value for logging - shows only updated fields concisely
+pub fn format_compact_value(decoded: &DecodedValue) -> String {
+    match decoded {
+        DecodedValue::Structure(fields) => {
+            if fields.is_empty() {
+                return "{}".to_string();
+            }
+
+            let mut parts = Vec::new();
+
+            for (name, val) in fields {
+                let formatted = format_field_value_compact(name, val);
+                if !formatted.is_empty() {
+                    parts.push(formatted);
+                }
+            }
+
+            parts.join(", ")
+        }
+        _ => format!("{}", decoded),
+    }
+}
+
+/// Format a single field value compactly - shows key info for known structures
+fn format_field_value_compact(name: &str, val: &DecodedValue) -> String {
+    match val {
+        DecodedValue::Structure(fields) => {
+            // For known EPICS NTScalar structures, show only key fields
+            match name {
+                "alarm" => {
+                    // Show severity and message if non-zero/non-empty
+                    let severity = fields.iter().find(|(n, _)| n == "severity");
+                    let message = fields.iter().find(|(n, _)| n == "message");
+                    let mut parts = Vec::new();
+                    if let Some((_, DecodedValue::Int32(s))) = severity {
+                        if *s != 0 {
+                            parts.push(format!("sev={}", s));
+                        }
+                    }
+                    if let Some((_, DecodedValue::String(m))) = message {
+                        if !m.is_empty() {
+                            parts.push(format!("\"{}\"", m));
+                        }
+                    }
+                    if parts.is_empty() {
+                        String::new() // Don't show alarm if it's OK
+                    } else {
+                        format!("alarm={{{}}}", parts.join(", "))
+                    }
+                }
+                "timeStamp" => {
+                    // Show just seconds or skip entirely for brevity
+                    let secs = fields.iter().find(|(n, _)| n == "secondsPastEpoch");
+                    if let Some((_, DecodedValue::Int64(s))) = secs {
+                        format!("ts={}", s)
+                    } else {
+                        String::new()
+                    }
+                }
+                "display" | "control" | "valueAlarm" => {
+                    // Skip verbose metadata structures in compact view
+                    String::new()
+                }
+                _ => {
+                    // For other structures, show all fields
+                    let nested: Vec<String> = fields
+                        .iter()
+                        .map(|(n, v)| format!("{}={}", n, format_scalar_value(v)))
+                        .collect();
+
+                    if nested.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{}={{{}}}", name, nested.join(", "))
+                    }
+                }
+            }
+        }
+        _ => {
+            format!("{}={}", name, format_scalar_value(val))
+        }
+    }
+}
+
+/// Format a scalar value concisely
+fn format_scalar_value(val: &DecodedValue) -> String {
+    match val {
+        DecodedValue::Null => "null".to_string(),
+        DecodedValue::Boolean(v) => format!("{}", v),
+        DecodedValue::Int8(v) => format!("{}", v),
+        DecodedValue::Int16(v) => format!("{}", v),
+        DecodedValue::Int32(v) => format!("{}", v),
+        DecodedValue::Int64(v) => format!("{}", v),
+        DecodedValue::UInt8(v) => format!("{}", v),
+        DecodedValue::UInt16(v) => format!("{}", v),
+        DecodedValue::UInt32(v) => format!("{}", v),
+        DecodedValue::UInt64(v) => format!("{}", v),
+        DecodedValue::Float32(v) => format!("{:.4}", v),
+        DecodedValue::Float64(v) => format!("{:.6}", v),
+        DecodedValue::String(v) => format!("\"{}\"", v),
+        DecodedValue::Array(arr) => {
+            if arr.is_empty() {
+                "[]".to_string()
+            } else if arr.len() <= 3 {
+                let items: Vec<String> = arr.iter().map(|v| format_scalar_value(v)).collect();
+                format!("[{}]", items.join(", "))
+            } else {
+                format!("[{} items]", arr.len())
+            }
+        }
+        DecodedValue::Structure(fields) => {
+            let nested: Vec<String> = fields
+                .iter()
+                .map(|(n, v)| format!("{}={}", n, format_scalar_value(v)))
+                .collect();
+            format!("{{{}}}", nested.join(", "))
+        }
+        DecodedValue::Raw(data) => {
+            if data.len() <= 4 {
+                format!("<{}>", hex::encode(data))
+            } else {
+                format!("<{}B>", data.len())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decode_size() {
+        let decoder = PvdDecoder::new(false);
+
+        // Small size (single byte)
+        assert_eq!(decoder.decode_size(&[5]), Some((5, 1)));
+        assert_eq!(decoder.decode_size(&[253]), Some((253, 1)));
+
+        // Medium/large size (5 bytes, 254 prefix + uint32)
+        assert_eq!(
+            decoder.decode_size(&[254, 0x00, 0x01, 0x00, 0x00]),
+            Some((256, 5))
+        );
+    }
+
+    #[test]
+    fn test_parse_introspection_full_with_id() {
+        let decoder = PvdDecoder::new(false);
+        let data = vec![
+            0xFD, // FULL_WITH_ID
+            0x06, 0x00, // registry key (little-endian)
+            0x80, // structure type follows
+            0x00, // empty struct id
+            0x01, // one field
+            0x05, b'v', b'a', b'l', b'u', b'e', // field name
+            0x43, // float64
+        ];
+        let desc = decoder
+            .parse_introspection(&data)
+            .expect("parsed introspection");
+        assert_eq!(desc.fields.len(), 1);
+        assert_eq!(desc.fields[0].name, "value");
+        match desc.fields[0].field_type {
+            FieldType::Scalar(TypeCode::Float64) => {}
+            _ => panic!("expected float64 value field"),
+        }
+    }
+
+    #[test]
+    fn test_decode_string() {
+        let decoder = PvdDecoder::new(false);
+
+        // Empty string
+        assert_eq!(decoder.decode_string(&[0]), Some((String::new(), 1)));
+
+        // "hello"
+        let data = [5, b'h', b'e', b'l', b'l', b'o'];
+        assert_eq!(decoder.decode_string(&data), Some(("hello".to_string(), 6)));
+    }
+
+    #[test]
+    fn decode_variant_accepts_full_with_id_type_tag() {
+        let decoder = PvdDecoder::new(false);
+        // Variant payload: 0xFD + int16 key + string type + "ok"
+        let data = [0xFD, 0x02, 0x00, 0x60, 0x02, b'o', b'k'];
+        let (value, consumed) = decoder
+            .decode_value(&data, &FieldType::Variant)
+            .expect("decode variant");
+        assert_eq!(consumed, data.len());
+        assert!(matches!(value, DecodedValue::String(ref s) if s == "ok"));
+    }
+
+    #[test]
+    fn test_decode_bitset_whole_structure() {
+        let decoder = PvdDecoder::new(false);
+        let desc = StructureDesc {
+            struct_id: None,
+            fields: vec![FieldDesc {
+                name: "value".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Float64),
+            }],
+        };
+        // bitset_size=1, bitset=0x01 (whole structure), then float64 value.
+        let mut data = Vec::new();
+        data.push(0x01);
+        data.push(0x01);
+        data.extend_from_slice(&1.25f64.to_le_bytes());
+
+        let (decoded, _consumed) = decoder
+            .decode_structure_with_bitset(&data, &desc)
+            .expect("decoded");
+        if let DecodedValue::Structure(fields) = decoded {
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0].0, "value");
+        } else {
+            panic!("expected structure");
+        }
+    }
+
+    #[test]
+    fn format_structure_tree_includes_nested_fields() {
+        let desc = StructureDesc {
+            struct_id: Some("epics:nt/NTScalar:1.0".to_string()),
+            fields: vec![
+                FieldDesc {
+                    name: "value".to_string(),
+                    field_type: FieldType::Scalar(TypeCode::Float64),
+                },
+                FieldDesc {
+                    name: "alarm".to_string(),
+                    field_type: FieldType::Structure(StructureDesc {
+                        struct_id: None,
+                        fields: vec![
+                            FieldDesc {
+                                name: "severity".to_string(),
+                                field_type: FieldType::Scalar(TypeCode::Int32),
+                            },
+                            FieldDesc {
+                                name: "message".to_string(),
+                                field_type: FieldType::String,
+                            },
+                        ],
+                    }),
+                },
+            ],
+        };
+
+        let rendered = format_structure_tree(&desc);
+        assert!(rendered.contains("struct epics:nt/NTScalar:1.0"));
+        assert!(rendered.contains("value: double"));
+        assert!(rendered.contains("alarm: structure"));
+        assert!(rendered.contains("severity: int"));
+        assert!(rendered.contains("message: string"));
+    }
+
+    #[test]
+    fn decode_string_array_not_capped_at_100_items() {
+        fn encode_size(size: usize) -> Vec<u8> {
+            if size == 0 {
+                return vec![0x00];
+            }
+            if size < 254 {
+                return vec![size as u8];
+            }
+            let mut out = vec![0xFE];
+            out.extend_from_slice(&(size as u32).to_le_bytes());
+            out
+        }
+
+        let item_count = 150usize;
+        let mut raw = encode_size(item_count);
+        for idx in 0..item_count {
+            let s = format!("PV:{}", idx);
+            raw.extend_from_slice(&encode_size(s.len()));
+            raw.extend_from_slice(s.as_bytes());
+        }
+
+        let decoder = PvdDecoder::new(false);
+        let (decoded, _consumed) = decoder
+            .decode_value(&raw, &FieldType::StringArray)
+            .expect("decoded");
+
+        let DecodedValue::Array(items) = decoded else {
+            panic!("expected decoded array");
+        };
+        assert_eq!(items.len(), item_count);
+    }
+}

@@ -1,1 +1,3 @@
-# placeholder
+[workspace]
+members = ["pva-types", "pva-codec", "pva-tools"]
+resolver = "2"

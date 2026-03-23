@@ -1,0 +1,87 @@
+[package]
+name = "pva-tools"
+version = "0.1.0"
+edition = "2021"
+description = "PVAccess client/server tools for EPICS"
+license = "GPL-3.0-or-later"
+repository = "https://gitlab.stfc.ac.uk/isis-accelerator-controls/playground/mateusz-leputa/epics-monitor-rust"
+readme = "../../README.md"
+
+[features]
+default = ["client", "server", "tui"]
+client = []
+server = []
+tui = ["dep:ratatui", "dep:color-eyre"]
+
+[dependencies]
+pva-types = { path = "../pva-types" }
+pva-codec = { path = "../pva-codec" }
+
+tokio = { version = "1.47.1", features = ["full"] }
+tracing = "0.1.41"
+tracing-subscriber = "0.3.20"
+chrono = "0.4"
+serde_json = "1.0.145"
+regex = "1.11.2"
+dns-lookup = "3.0.0"
+get_if_addrs = "0.5.3"
+hex = "0.4.3"
+socket2 = { version = "0.5", features = ["all"] }
+argparse = "0.2.2"
+ratatui = { version = "0.29.0", optional = true }
+color-eyre = { version = "0.6.5", optional = true }
+
+[[bin]]
+name = "pvget"
+path = "src/bin/pvget.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "pvmonitor"
+path = "src/bin/pvmonitor.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "pvput"
+path = "src/bin/pvput.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "pvsine"
+path = "src/bin/pvsine.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "pvinfo"
+path = "src/bin/pvinfo.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "pvexplore"
+path = "src/bin/pvexplore.rs"
+required-features = ["client", "tui"]
+
+[[bin]]
+name = "pvlist"
+path = "src/bin/pvlist.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "pva_server"
+path = "src/bin/pva_server.rs"
+required-features = ["server"]
+
+[[bin]]
+name = "pvdodeca"
+path = "src/bin/pvdodeca.rs"
+required-features = ["server"]
+
+[[bin]]
+name = "pvsearch"
+path = "src/bin/pvsearch.rs"
+required-features = ["client", "tui"]
+
+[[bin]]
+name = "pva_get_compare"
+path = "src/bin/pva_get_compare.rs"
+required-features = ["client"]
