@@ -20,6 +20,7 @@ The project is structured as a Cargo workspace with three crates:
 
 ### Install Rust 
 ``` bash
+# Linux
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 ### clone the repo
