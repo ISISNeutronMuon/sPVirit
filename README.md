@@ -11,7 +11,7 @@ Spvirit is a Rust library for working with EPICS PVAccess protocol, including en
 
 Key areas of development in the near future include:
 - More complete support for EPICS Normative Types (NT) and their associated metadata.
-- softIOC-like server functionality, including parsing of EPICS db files and support for more complex PV types and behaviors, a prototype of which is already available in the `spvirit_server` tool.
+- softIOC-like server functionality, including parsing of EPICS db files and support for more complex PV types and behaviors, a prototype of which is already available in the `spserver` tool.
 
 ## Why Rust? 
 
@@ -44,13 +44,13 @@ cargo build --release
 
 ### Run the tools
 ``` bash
-cargo run --bin spvirit_monitor my:pv:name
+cargo run --bin spmonitor my:pv:name
 # or
-./target/release/spvirit_monitor my:pv:name
+./target/release/spmonitor my:pv:name
 # or if installed 
 cargo install spvirit-tools
 
-spvirit_monitor my:pv:name
+spmonitor my:pv:name
 ```
 ### Using the library in your own Rust project
 
@@ -141,20 +141,20 @@ cargo run --example decode_packet -p spvirit-codec       # self-contained, no IO
 
 | spvirit tool | EPICS Base equivalent | Description |
 |---|---|---|
-| `spvirit_get` | `pvget` | Fetch the current value of a PV |
-| `spvirit_put` | `pvput` | Write a value to a PV |
-| `spvirit_monitor` | `pvmonitor` | Subscribe to a PV and print value changes |
-| `spvirit_info` | `pvinfo` | Display field/metadata information for a PV |
-| `spvirit_list` | `pvlist` | List all available PVs on discovered servers |
-| `spvirit_server` | `softIoc` | Not fully one-to-one - just a demo, it does parse some db file vocab |
-| `spvirit_explore` |  | Interactive TUI to browse servers, select PVs, and monitor values |
-| `spvirit_search` |  | TUI showing PV search network traffic for diagnostics |
-| `spvirit_sine` |  | Continuously write a sine wave to a PV (demo/testing) |
-| `spvirit_dodeca` |  | Server publishing a rotating 3D dodecahedron as an NTNDArray PV |
+| `spget` | `pvget` | Fetch the current value of a PV |
+| `spput` | `pvput` | Write a value to a PV |
+| `spmonitor` | `pvmonitor` | Subscribe to a PV and print value changes |
+| `spinfo` | `pvinfo` | Display field/metadata information for a PV |
+| `splist` | `pvlist` | List all available PVs on discovered servers |
+| `spserver` | `softIoc` | Not fully one-to-one - just a demo, it does parse some db file vocab |
+| `spexplore` |  | Interactive TUI to browse servers, select PVs, and monitor values |
+| `spsearch` |  | TUI showing PV search network traffic for diagnostics |
+| `spsine` |  | Continuously write a sine wave to a PV (demo/testing) |
+| `spdodeca` |  | Server publishing a rotating 3D dodecahedron as an NTNDArray PV |
 
 ## Server (softIOC like experiment)
 
-While not a full softIOC implementation, `spvirit_server` is a simple PVAccess server that can serve some static PVs and parse a limited subset of EPICS db file syntax. It proves that the encoding/decoding and connection handling logic in `spvirit-codec` is sufficient to implement a server, and it can be used as a starting for a more full featured softIOC in the future. (hint hint PRs welcome :))
+While not a full softIOC implementation, `spserver` is a simple PVAccess server that can serve some static PVs and parse a limited subset of EPICS db file syntax. It proves that the encoding/decoding and connection handling logic in `spvirit-codec` is sufficient to implement a server, and it can be used as a starting for a more full featured softIOC in the future. (hint hint PRs welcome :))
 
 ## Integration test matrix 
 I have tested the tools in this repo against the following EPICS PVAccess servers:
