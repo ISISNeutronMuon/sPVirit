@@ -295,7 +295,9 @@ fn join_multicast_any(socket: &std::net::UdpSocket, bind: IpAddr) {
 }
 
 fn decode_search_response_addr(addr: [u8; 16], port: u16, src: SocketAddr) -> SocketAddr {
-    socket_addr_from_pva_bytes(addr, port).unwrap_or_else(|| SocketAddr::new(src.ip(), port))
+    socket_addr_from_pva_bytes(addr, port)
+        .filter(|a| !a.ip().is_unspecified())
+        .unwrap_or_else(|| SocketAddr::new(src.ip(), port))
 }
 
 fn normalize_discovered_servers(items: Vec<DiscoveredServer>) -> Vec<DiscoveredServer> {
