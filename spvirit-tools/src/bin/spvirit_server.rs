@@ -687,7 +687,7 @@ async fn handle_connection(
                     conn_id, version, is_be, val.buffer_size, val.qos, val.authz
                 );
                 // Empirically required by pvAccess clients: send CONNECTION_VALIDATED (cmd=9) status OK.
-                let resp = spvirit_codec::spvirit_encode::encode_connection_validated(version, is_be);
+                let resp = spvirit_codec::spvirit_encode::encode_connection_validated(true, version, is_be);
                 validate_encoded_packet(conn_id, "conn_validated_resp", &resp);
                 dump_hex_packet(
                     conn_id,
@@ -2652,13 +2652,29 @@ fn scalar_to_bool(value: &ScalarValue) -> Option<bool> {
             "0" | "false" | "no" | "off" => Some(false),
             _ => None,
         },
+        ScalarValue::I8(v) => Some(*v != 0),
+        ScalarValue::I16(v) => Some(*v != 0),
+        ScalarValue::I64(v) => Some(*v != 0),
+        ScalarValue::U8(v) => Some(*v != 0),
+        ScalarValue::U16(v) => Some(*v != 0),
+        ScalarValue::U32(v) => Some(*v != 0),
+        ScalarValue::U64(v) => Some(*v != 0),
+        ScalarValue::F32(v) => Some(*v != 0.0),
     }
 }
 
 fn scalar_to_f64(value: &ScalarValue) -> Option<f64> {
     match value {
         ScalarValue::Bool(v) => Some(if *v { 1.0 } else { 0.0 }),
+        ScalarValue::I8(v) => Some(*v as f64),
+        ScalarValue::I16(v) => Some(*v as f64),
         ScalarValue::I32(v) => Some(*v as f64),
+        ScalarValue::I64(v) => Some(*v as f64),
+        ScalarValue::U8(v) => Some(*v as f64),
+        ScalarValue::U16(v) => Some(*v as f64),
+        ScalarValue::U32(v) => Some(*v as f64),
+        ScalarValue::U64(v) => Some(*v as f64),
+        ScalarValue::F32(v) => Some(*v as f64),
         ScalarValue::F64(v) => Some(*v),
         ScalarValue::Str(v) => v.parse::<f64>().ok(),
     }
@@ -2667,7 +2683,15 @@ fn scalar_to_f64(value: &ScalarValue) -> Option<f64> {
 fn scalar_to_string(value: &ScalarValue) -> Option<String> {
     match value {
         ScalarValue::Bool(v) => Some(if *v { "1".to_string() } else { "0".to_string() }),
+        ScalarValue::I8(v) => Some(v.to_string()),
+        ScalarValue::I16(v) => Some(v.to_string()),
         ScalarValue::I32(v) => Some(v.to_string()),
+        ScalarValue::I64(v) => Some(v.to_string()),
+        ScalarValue::U8(v) => Some(v.to_string()),
+        ScalarValue::U16(v) => Some(v.to_string()),
+        ScalarValue::U32(v) => Some(v.to_string()),
+        ScalarValue::U64(v) => Some(v.to_string()),
+        ScalarValue::F32(v) => Some(v.to_string()),
         ScalarValue::F64(v) => Some(v.to_string()),
         ScalarValue::Str(v) => Some(v.clone()),
     }
@@ -3050,6 +3074,26 @@ fn apply_value_update(nt: &mut NtScalar, val: &DecodedValue, compute_alarms: boo
         spvirit_tools::spvirit_server::types::ScalarValue::Str(current) => {
             if let Some(v) = decoded_to_string(val) {
                 *current = v;
+                if compute_alarms {
+                    nt.update_alarm_from_value();
+                }
+                return true;
+            }
+        }
+        // For additional numeric types, coerce via f64 then store back.
+        _ => {
+            if let Some(v) = decoded_to_f64(val) {
+                match &mut nt.value {
+                    spvirit_tools::spvirit_server::types::ScalarValue::I8(c) => { *c = v as i8; }
+                    spvirit_tools::spvirit_server::types::ScalarValue::I16(c) => { *c = v as i16; }
+                    spvirit_tools::spvirit_server::types::ScalarValue::I64(c) => { *c = v as i64; }
+                    spvirit_tools::spvirit_server::types::ScalarValue::U8(c) => { *c = v as u8; }
+                    spvirit_tools::spvirit_server::types::ScalarValue::U16(c) => { *c = v as u16; }
+                    spvirit_tools::spvirit_server::types::ScalarValue::U32(c) => { *c = v as u32; }
+                    spvirit_tools::spvirit_server::types::ScalarValue::U64(c) => { *c = v as u64; }
+                    spvirit_tools::spvirit_server::types::ScalarValue::F32(c) => { *c = v as f32; }
+                    _ => return false,
+                }
                 if compute_alarms {
                     nt.update_alarm_from_value();
                 }

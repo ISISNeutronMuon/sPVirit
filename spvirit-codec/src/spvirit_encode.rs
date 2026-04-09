@@ -110,9 +110,9 @@ pub fn encode_search_response(
     out
 }
 
-pub fn encode_connection_validated(version: u8, is_be: bool) -> Vec<u8> {
+pub fn encode_connection_validated(is_server: bool, version: u8, is_be: bool) -> Vec<u8> {
     let payload = encode_status_ok();
-    let mut out = encode_header(true, is_be, false, version, 9, payload.len() as u32);
+    let mut out = encode_header(is_server, is_be, false, version, 9, payload.len() as u32);
     out.extend_from_slice(&payload);
     out
 }
@@ -231,18 +231,24 @@ pub fn encode_create_channel_request(cid: u32, pv_name: &str, version: u8, is_be
 }
 
 pub fn encode_get_field_request(
-    cid: u32,
-    field_name: Option<&str>,
+    sid: u32,
+    ioid: u32,
+    sub_field: Option<&str>,
     version: u8,
     is_be: bool,
 ) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&if is_be {
-        cid.to_be_bytes()
+        sid.to_be_bytes()
     } else {
-        cid.to_le_bytes()
+        sid.to_le_bytes()
     });
-    payload.extend_from_slice(&encode_string_pva(field_name.unwrap_or(""), is_be));
+    payload.extend_from_slice(&if is_be {
+        ioid.to_be_bytes()
+    } else {
+        ioid.to_le_bytes()
+    });
+    payload.extend_from_slice(&encode_string_pva(sub_field.unwrap_or(""), is_be));
     let mut out = encode_header(false, is_be, false, version, 17, payload.len() as u32);
     out.extend_from_slice(&payload);
     out
@@ -321,6 +327,7 @@ pub fn encode_rpc_request(
 
 pub fn encode_search_request(
     seq: u32,
+    flags: u8,
     port: u16,
     reply_addr: [u8; 16],
     pv_requests: &[(u32, &str)],
@@ -333,7 +340,7 @@ pub fn encode_search_request(
     } else {
         seq.to_le_bytes()
     });
-    payload.push(0x81);
+    payload.push(flags);
     payload.extend_from_slice(&[0u8; 3]);
     payload.extend_from_slice(&reply_addr);
     payload.extend_from_slice(&if is_be {
@@ -977,7 +984,7 @@ mod tests {
 
     #[test]
     fn encode_decode_connection_validated_roundtrip() {
-        let msg = encode_connection_validated(2, false);
+        let msg = encode_connection_validated(true, 2, false);
         let mut pkt = PvaPacket::new(&msg);
         let cmd = pkt.decode_payload().expect("decoded");
         match cmd {
@@ -1118,13 +1125,14 @@ mod tests {
 
     #[test]
     fn encode_decode_get_field_request_roundtrip() {
-        let msg = encode_get_field_request(9, Some("*"), 2, false);
+        let msg = encode_get_field_request(9, 1, Some("*"), 2, false);
         let mut pkt = PvaPacket::new(&msg);
         let cmd = pkt.decode_payload().expect("decoded");
         match cmd {
             PvaPacketCommand::GetField(payload) => {
                 assert!(!payload.is_server);
-                assert_eq!(payload.cid, 9);
+                assert_eq!(payload.sid, Some(9));
+                assert_eq!(payload.ioid, Some(1));
                 assert_eq!(payload.field_name.as_deref(), Some("*"));
             }
             other => panic!("unexpected decode: {:?}", other),
@@ -1202,7 +1210,7 @@ mod tests {
         let port = 5076;
         let reply_addr = ip_to_bytes(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)));
         let requests = [(cid, "TEST:PV")];
-        let msg = encode_search_request(seq, port, reply_addr, &requests, 2, false);
+        let msg = encode_search_request(seq, 0x81, port, reply_addr, &requests, 2, false);
         let mut pkt = PvaPacket::new(&msg);
         let cmd = pkt.decode_payload().expect("decoded");
         match cmd {

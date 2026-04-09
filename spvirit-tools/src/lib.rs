@@ -1,6 +1,6 @@
 //! PVAccess client/server tools for EPICS.
 //!
-//! This crate provides a PVA client library (`spvirit_client`) and server
+//! This crate provides a PVA client library (via `spvirit-client`) and server
 //! library (`spvirit_server`), along with command-line tools: `pvget`,
 //! `pvput`, `pvmonitor`, `pvlist`, `pvinfo`, `pvexplore`, `pvsine`,
 //! `spvirit_server`, and `spvirit_get_compare`.

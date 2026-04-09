@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use spvirit_tools::spvirit_client::client::pvget;
+use spvirit_client::pvget;
 use spvirit_tools::spvirit_client::types::PvGetOptions;
 use spvirit_codec::spvd_decode::DecodedValue;
 

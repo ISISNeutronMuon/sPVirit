@@ -4,7 +4,7 @@ use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
-use crate::spvirit_client::types::PvGetError;
+use crate::types::PvGetError;
 use spvirit_codec::epics_decode::{PvaHeader, PvaPacket, PvaPacketCommand};
 
 pub async fn read_packet(

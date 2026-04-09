@@ -10,9 +10,9 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::UdpSocket;
 use tracing::debug;
 
-use crate::spvirit_client::auth::{default_authnz_host, default_authnz_user};
-use crate::spvirit_client::transport::read_packet;
-use crate::spvirit_client::types::{PvGetError, PvGetOptions};
+use crate::auth::{default_authnz_host, default_authnz_user};
+use crate::transport::read_packet;
+use crate::types::{PvGetError, PvGetOptions};
 use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
 use spvirit_codec::spvirit_encode::{
     encode_client_connection_validation, encode_search_request, ip_to_bytes,
@@ -442,7 +442,7 @@ pub async fn search_pv(
             }
         };
         let requests = [(cid, pv_name)];
-        let msg = encode_search_request(seq, reply_port, reply_addr, &requests, 2, false);
+        let msg = encode_search_request(seq, 0x81, reply_port, reply_addr, &requests, 2, false);
 
         let socket = match UdpSocket::from_std(std_sock) {
             Ok(socket) => socket,
@@ -711,7 +711,7 @@ pub async fn search_pv_tcp(
     let seq = (now_ts.as_nanos() as u32).wrapping_add(std::process::id());
     let cid = seq ^ 0x9E37_79B9;
     let requests = [(cid, pv_name)];
-    let msg = encode_search_request(seq, 0, [0u8; 16], &requests, version, is_be);
+    let msg = encode_search_request(seq, 0x80, 0, [0u8; 16], &requests, version, is_be);
     stream.write_all(&msg).await?;
 
     if debug_enabled {
@@ -938,7 +938,7 @@ pub async fn discover_servers(
                 continue;
             }
         };
-        let msg = encode_search_request(seq, reply_port, reply_addr, &[], 2, false);
+        let msg = encode_search_request(seq, 0x81, reply_port, reply_addr, &[], 2, false);
 
         let socket = match UdpSocket::from_std(std_sock) {
             Ok(socket) => socket,
@@ -1085,7 +1085,7 @@ mod tests {
         let pv_name = "TEST:PV";
         let reply_addr = ip_to_bytes(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)));
         let requests = [(cid, pv_name)];
-        let msg = encode_search_request(seq, port, reply_addr, &requests, 2, false);
+        let msg = encode_search_request(seq, 0x81, port, reply_addr, &requests, 2, false);
         let mut pkt = PvaPacket::new(&msg);
         let cmd = pkt.decode_payload().expect("decoded");
         match cmd {
@@ -1108,7 +1108,7 @@ mod tests {
         let seq = 4321;
         let port = 5076;
         let reply_addr = ip_to_bytes(IpAddr::V4(Ipv4Addr::new(10, 20, 30, 40)));
-        let msg = encode_search_request(seq, port, reply_addr, &[], 2, false);
+        let msg = encode_search_request(seq, 0x81, port, reply_addr, &[], 2, false);
         let mut pkt = PvaPacket::new(&msg);
         let cmd = pkt.decode_payload().expect("decoded");
         match cmd {

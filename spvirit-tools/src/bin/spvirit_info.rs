@@ -1,12 +1,10 @@
-use std::net::SocketAddr;
 use argparse::{ArgumentParser, Store, StoreTrue};
 use tokio::io::AsyncWriteExt;
 use tokio::runtime::Runtime;
 
+use spvirit_client::{pvget, pvinfo as high_level_pvinfo};
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
-use spvirit_tools::spvirit_client::client::{
-    encode_get_field_request, establish_channel, pvget, ChannelConn,
-};
+use spvirit_tools::spvirit_client::client::{establish_channel, ChannelConn};
 use spvirit_tools::spvirit_client::search::resolve_pv_server;
 use spvirit_tools::spvirit_client::transport::read_until;
 use spvirit_tools::spvirit_client::types::{PvGetError, PvGetOptions};
@@ -14,6 +12,8 @@ use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
 use spvirit_codec::spvirit_encode::encode_header;
 use spvirit_codec::spvd_decode::{extract_subfield_desc, format_structure_tree, StructureDesc};
 
+/// Legacy fallback: GET_FIELD without the field-name wire field, for servers
+/// that crash when they receive an empty field-name string.
 fn encode_get_field_request_without_field_name(
     cid: u32,
     version: u8,
@@ -45,36 +45,22 @@ fn should_retry_get_field_without_name(err: &PvGetError) -> bool {
 
 fn should_fallback_to_pvget(err: &PvGetError) -> bool {
     should_retry_get_field_without_name(err)
-        || matches!(err, PvGetError::Protocol(msg) if msg.contains("get_field"))
+        || matches!(err, PvGetError::Protocol(msg) if msg.contains("get_field") || msg.contains("GET_FIELD"))
 }
 
-async fn pvinfo_once(
-    target: SocketAddr,
-    opts: &PvGetOptions,
-    subfield: &str,
-    include_empty_field_name: bool,
-) -> Result<StructureDesc, PvGetError> {
-    let conn = establish_channel(target, opts).await?;
+/// Legacy fallback: GET_FIELD without field name string.
+async fn pvinfo_no_field_name(opts: &PvGetOptions) -> Result<StructureDesc, PvGetError> {
+    let target = resolve_pv_server(opts).await?;
     let ChannelConn {
         mut stream,
-        sid: _,
+        sid,
         version,
         is_be,
-    } = conn;
-    let cid = 1u32;
+    } = establish_channel(target, opts).await?;
 
-    let get_field = if subfield.is_empty() {
-        if include_empty_field_name {
-            encode_get_field_request(cid, None, version, is_be)
-        } else {
-            encode_get_field_request_without_field_name(cid, version, is_be)
-        }
-    } else {
-        encode_get_field_request(cid, Some(subfield), version, is_be)
-    };
+    let get_field = encode_get_field_request_without_field_name(sid, version, is_be);
     stream.write_all(&get_field).await?;
 
-    // Read GET_FIELD response
     let field_resp = read_until(&mut stream, opts.timeout, |cmd| {
         matches!(cmd, PvaPacketCommand::GetField(_))
     })
@@ -83,7 +69,7 @@ async fn pvinfo_once(
     let cmd = pkt.decode_payload().ok_or(PvGetError::Protocol(
         "get_field response decode failed".to_string(),
     ))?;
-    let desc = match cmd {
+    match cmd {
         PvaPacketCommand::GetField(payload) => payload.introspection.ok_or_else(|| {
             let status_msg = payload
                 .status
@@ -96,29 +82,27 @@ async fn pvinfo_once(
                 })
                 .unwrap_or_else(|| "unknown error".to_string());
             PvGetError::Protocol(format!("get_field failed: {}", status_msg))
-        })?,
-        _ => {
-            return Err(PvGetError::Protocol(
-                "unexpected get_field response".to_string(),
-            ))
-        }
-    };
-
-    Ok(desc)
+        }),
+        _ => Err(PvGetError::Protocol(
+            "unexpected get_field response".to_string(),
+        )),
+    }
 }
 
-async fn pvinfo(opts: &PvGetOptions, subfield: &str) -> Result<StructureDesc, PvGetError> {
-    let target = resolve_pv_server(opts).await?;
-
-    let primary = pvinfo_once(target, opts, subfield, true).await;
+async fn pvinfo_with_fallback(
+    opts: &PvGetOptions,
+    subfield: &str,
+) -> Result<StructureDesc, PvGetError> {
+    // Primary: high-level PvaClient::pvinfo
+    let primary = high_level_pvinfo(opts).await;
     if let Ok(desc) = primary {
         return Ok(desc);
     }
+    let primary_err = primary.unwrap_err();
 
-    let primary_err = primary.err().expect("primary error exists");
-
+    // Fallback 1: GET_FIELD without field name (legacy servers that crash on empty string)
     if subfield.is_empty() && should_retry_get_field_without_name(&primary_err) {
-        match pvinfo_once(target, opts, subfield, false).await {
+        match pvinfo_no_field_name(opts).await {
             Ok(desc) => return Ok(desc),
             Err(retry_err) => {
                 if should_fallback_to_pvget(&retry_err) {
@@ -137,6 +121,7 @@ async fn pvinfo(opts: &PvGetOptions, subfield: &str) -> Result<StructureDesc, Pv
         }
     }
 
+    // Fallback 2: pvget (for servers that don't support GET_FIELD at all)
     if should_fallback_to_pvget(&primary_err) {
         return pvget(opts)
             .await
@@ -189,7 +174,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opts = common.into_pv_get_options(pv_name.clone())?;
 
     let rt = Runtime::new()?;
-    let desc = rt.block_on(pvinfo(&opts, &subfield))?;
+    let desc = rt.block_on(pvinfo_with_fallback(&opts, &subfield))?;
 
     // If a sub-field was requested, filter the result client-side
     let display_desc = if !subfield.is_empty() {

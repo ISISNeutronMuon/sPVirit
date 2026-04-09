@@ -8,7 +8,15 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScalarValue {
     Bool(bool),
+    I8(i8),
+    I16(i16),
     I32(i32),
+    I64(i64),
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+    F32(f32),
     F64(f64),
     Str(String),
 }
@@ -256,6 +264,15 @@ impl NtScalar {
     pub fn update_alarm_from_value(&mut self) {
         let val = match self.value {
             ScalarValue::F64(v) => v,
+            ScalarValue::F32(v) => v as f64,
+            ScalarValue::I8(v) => v as f64,
+            ScalarValue::I16(v) => v as f64,
+            ScalarValue::I32(v) => v as f64,
+            ScalarValue::I64(v) => v as f64,
+            ScalarValue::U8(v) => v as f64,
+            ScalarValue::U16(v) => v as f64,
+            ScalarValue::U32(v) => v as f64,
+            ScalarValue::U64(v) => v as f64,
             _ => {
                 self.alarm_severity = 0;
                 self.alarm_status = 0;

@@ -810,11 +810,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "spvirit-client"
+version = "0.1.4"
+dependencies = [
+ "chrono",
+ "dns-lookup",
+ "get_if_addrs",
+ "serde_json",
+ "socket2 0.5.10",
+ "spvirit-codec",
+ "spvirit-types",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "spvirit-codec"
 version = "0.1.4"
 dependencies = [
  "hex",
  "spvirit-types",
+ "tracing",
+]
+
+[[package]]
+name = "spvirit-server"
+version = "0.1.4"
+dependencies = [
+ "get_if_addrs",
+ "regex",
+ "socket2 0.5.10",
+ "spvirit-codec",
+ "spvirit-types",
+ "tokio",
  "tracing",
 ]
 
@@ -832,7 +860,9 @@ dependencies = [
  "regex",
  "serde_json",
  "socket2 0.5.10",
+ "spvirit-client",
  "spvirit-codec",
+ "spvirit-server",
  "spvirit-types",
  "tokio",
  "tracing",

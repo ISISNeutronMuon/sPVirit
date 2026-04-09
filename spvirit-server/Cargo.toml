@@ -1,0 +1,24 @@
+[package]
+name = "spvirit-server"
+version = "0.1.4"
+edition = "2024"
+description = "PVAccess server library for EPICS"
+license = "BSD-3-Clause"
+repository = "https://github.com/ISISNeutronMuon/spvirit"
+readme = "../README.md"
+keywords = ["epics", "pvaccess", "server"]
+categories = ["science"]
+authors = ["Mateusz Leputa for ISIS Neutron and Muon Source Copyright 2026"]
+
+[dependencies]
+spvirit-types = { version = "0.1.4", path = "../spvirit-types" }
+spvirit-codec = { version = "0.1.4", path = "../spvirit-codec" }
+
+tokio = { version = "1.47.1", features = ["net", "io-util", "time", "rt", "sync", "macros"] }
+tracing = "0.1.41"
+regex = "1.11.2"
+socket2 = { version = "0.5", features = ["all"] }
+get_if_addrs = "0.5.3"
+
+[dev-dependencies]
+tokio = { version = "1.47.1", features = ["rt-multi-thread", "macros"] }

@@ -135,8 +135,12 @@ pub struct PvaHeader {
 
 impl PvaHeader {
     pub fn new(raw: &[u8]) -> Self {
+        Self::try_new(raw).expect("PVA header requires at least 8 bytes")
+    }
+
+    pub fn try_new(raw: &[u8]) -> Option<Self> {
         if raw.len() < 8 {
-            panic!("PVA header is too short");
+            return None;
         }
         let magic = raw[0];
         let version = raw[1];
@@ -151,13 +155,13 @@ impl PvaHeader {
             u32::from_le_bytes(payload_length_bytes)
         };
 
-        Self {
+        Some(Self {
             magic,
             version,
             flags,
             command,
             payload_length,
-        }
+        })
     }
     pub fn is_valid(&self) -> bool {
         self.magic == 0xCA && self.flags.is_valid()

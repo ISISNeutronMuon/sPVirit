@@ -5,6 +5,7 @@ use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use tokio::runtime::Runtime;
 
+use spvirit_client::pvput as high_level_pvput;
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
 use spvirit_tools::spvirit_client::client::{
     encode_get_request, encode_put_request, ensure_status_ok, establish_channel, ChannelConn,
@@ -88,10 +89,9 @@ async fn run_get_cycle(
     Ok(())
 }
 
-async fn pvput_once(
+async fn pvput_full_flow(
     opts: &PvGetOptions,
     input: &Value,
-    simple_flow: bool,
 ) -> Result<(), PvGetError> {
     let target = resolve_pv_server(opts).await?;
 
@@ -103,11 +103,9 @@ async fn pvput_once(
         is_be,
     } = conn;
 
-    let put_ioid = if simple_flow { 1u32 } else { 2u32 };
+    run_get_cycle(&mut stream, opts.timeout, sid, 1u32, version, is_be).await?;
 
-    if !simple_flow {
-        run_get_cycle(&mut stream, opts.timeout, sid, 1u32, version, is_be).await?;
-    }
+    let put_ioid = 2u32;
 
     let put_init = encode_put_request(
         sid,
@@ -149,16 +147,14 @@ async fn pvput_once(
 
     let payload = encode_put_payload(&desc, input, is_be).map_err(|e| PvGetError::Protocol(e))?;
 
-    if !simple_flow {
-        // EPICS-base-style probe/readback step before writing value.
-        let put_get_req = encode_put_request(sid, put_ioid, 0x40, &[], version, is_be);
-        stream.write_all(&put_get_req).await?;
-        let put_get_resp = read_until(&mut stream, opts.timeout, |cmd| {
-            matches!(cmd, PvaPacketCommand::Op(op) if op.command == 11 && (op.subcmd & 0x40) != 0)
-        })
-        .await?;
-        ensure_status_ok(&put_get_resp, is_be, "put get-put")?;
-    }
+    // EPICS-base-style probe/readback step before writing value.
+    let put_get_req = encode_put_request(sid, put_ioid, 0x40, &[], version, is_be);
+    stream.write_all(&put_get_req).await?;
+    let put_get_resp = read_until(&mut stream, opts.timeout, |cmd| {
+        matches!(cmd, PvaPacketCommand::Op(op) if op.command == 11 && (op.subcmd & 0x40) != 0)
+    })
+    .await?;
+    ensure_status_ok(&put_get_resp, is_be, "put get-put")?;
 
     let put_req = encode_put_request(sid, put_ioid, 0x00, &payload, version, is_be);
     stream.write_all(&put_req).await?;
@@ -172,15 +168,12 @@ async fn pvput_once(
 
     ensure_status_ok(&put_resp, is_be, "put data")?;
 
-    if !simple_flow {
-        // Explicitly retire request lifecycle to mirror EPICS base traces.
-        let destroy = encode_destroy_request(put_ioid, version, is_be);
-        stream.write_all(&destroy).await?;
+    // Explicitly retire request lifecycle to mirror EPICS base traces.
+    let destroy = encode_destroy_request(put_ioid, version, is_be);
+    stream.write_all(&destroy).await?;
 
-        run_get_cycle(&mut stream, opts.timeout, sid, 3u32, version, is_be).await?;
-    }
+    run_get_cycle(&mut stream, opts.timeout, sid, 3u32, version, is_be).await?;
 
-    println!("{} OK", opts.pv_name);
     Ok(())
 }
 
@@ -191,23 +184,24 @@ async fn pvput(
     no_flow_fallback: bool,
 ) -> Result<(), PvGetError> {
     if simple_flow {
-        return pvput_once(opts, input, true).await;
+        high_level_pvput(opts, input.clone()).await?;
+        println!("{} OK", opts.pv_name);
+        return Ok(());
     }
 
-    match pvput_once(opts, input, false).await {
-        Ok(()) => Ok(()),
+    match pvput_full_flow(opts, input).await {
+        Ok(()) => {
+            println!("{} OK", opts.pv_name);
+            Ok(())
+        }
         Err(primary_err) => {
             if no_flow_fallback {
                 return Err(primary_err);
             }
 
-            match pvput_once(opts, input, true).await {
-                Ok(()) => Ok(()),
-                Err(simple_err) => Err(PvGetError::Protocol(format!(
-                    "full-flow pvput failed ({}); simple-flow retry failed ({})",
-                    primary_err, simple_err
-                ))),
-            }
+            high_level_pvput(opts, input.clone()).await?;
+            println!("{} OK", opts.pv_name);
+            Ok(())
         }
     }
 }

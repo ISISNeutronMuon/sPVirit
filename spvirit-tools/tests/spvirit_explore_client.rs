@@ -3,7 +3,8 @@ mod protocol;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
-use spvirit_tools::spvirit_client::explore::{fetch_snapshot_from_server, list_pvs_with_fallback};
+use spvirit_client::pvlist::pvlist_with_fallback;
+use spvirit_tools::spvirit_client::explore::fetch_snapshot_from_server;
 use spvirit_tools::spvirit_client::search::{discover_servers, SearchTarget};
 use spvirit_tools::spvirit_client::types::PvGetOptions;
 use spvirit_codec::spvd_decode::DecodedValue;
@@ -49,7 +50,7 @@ async fn list_pvs_with_fallback_returns_known_pvs() {
     let mut opts = PvGetOptions::new(String::new());
     opts.timeout = Duration::from_secs(2);
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), server.tcp_port);
-    let (names, _source) = list_pvs_with_fallback(&opts, addr).await.expect("list pvs");
+    let (names, _source) = pvlist_with_fallback(&opts, addr).await.expect("list pvs");
 
     assert!(names.contains(&"SIM:AI".to_string()));
     assert!(names.contains(&"SIM:AO".to_string()));

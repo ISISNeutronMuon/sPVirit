@@ -1,4 +1,4 @@
-use crate::spvirit_client::types::PvGetOptions;
+use crate::types::PvGetOptions;
 
 pub fn resolved_authnz_user(opts: &PvGetOptions) -> String {
     opts.authnz_user.clone().unwrap_or_else(default_authnz_user)

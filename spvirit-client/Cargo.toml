@@ -1,0 +1,26 @@
+[package]
+name = "spvirit-client"
+version = "0.1.4"
+edition = "2024"
+description = "PVAccess client library — search, connect, get, put, monitor."
+license = "BSD-3-Clause"
+repository = "https://github.com/ISISNeutronMuon/spvirit"
+readme = "../README.md"
+keywords = ["epics", "pvaccess"]
+categories = ["science"]
+authors = ["Mateusz Leputa for ISIS Neutron and Muon Source Copyright 2026"]
+
+[dependencies]
+spvirit-types = { version = "0.1.4", path = "../spvirit-types" }
+spvirit-codec = { version = "0.1.4", path = "../spvirit-codec" }
+
+tokio = { version = "1.47.1", features = ["net", "io-util", "time", "rt", "sync", "macros"] }
+tracing = "0.1.41"
+serde_json = "1.0.145"
+dns-lookup = "3.0.0"
+get_if_addrs = "0.5.3"
+socket2 = { version = "0.5", features = ["all"] }
+chrono = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1.47.1", features = ["rt-multi-thread", "macros"] }

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use regex::Regex;
 
-use crate::spvirit_server::types::{
+use crate::types::{
     DbCommonState, LinkExpr, NtScalar, NtScalarArray, OutputMode, RecordData, RecordInstance,
     RecordType, ScalarArrayValue, ScalarValue, ScanMode,
 };

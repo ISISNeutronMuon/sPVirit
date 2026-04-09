@@ -3,8 +3,9 @@ use std::time::Duration;
 
 use spvirit_codec::spvd_decode::{DecodedValue, StructureDesc};
 
+/// Configuration for PV operations (get, put, monitor, info).
 #[derive(Clone, Debug)]
-pub struct PvGetOptions {
+pub struct PvOptions {
     pub pv_name: String,
     pub timeout: Duration,
     pub server_addr: Option<SocketAddr>,
@@ -19,7 +20,10 @@ pub struct PvGetOptions {
     pub authnz_host: Option<String>,
 }
 
-impl PvGetOptions {
+/// Backwards-compatible alias — prefer [`PvOptions`].
+pub type PvGetOptions = PvOptions;
+
+impl PvOptions {
     pub fn new(pv_name: String) -> Self {
         Self {
             pv_name,
@@ -36,6 +40,13 @@ impl PvGetOptions {
             authnz_host: None,
         }
     }
+}
+
+/// A single monitor update delivered by [`PvaClient::pvmonitor`](crate::pva_client::PvaClient::pvmonitor).
+#[derive(Debug, Clone)]
+pub struct PvMonitorEvent {
+    pub pv_name: String,
+    pub value: DecodedValue,
 }
 
 #[derive(Debug)]

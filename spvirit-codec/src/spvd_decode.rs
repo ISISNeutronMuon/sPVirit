@@ -6,6 +6,10 @@
 use std::fmt;
 use tracing::debug;
 
+/// Re-export the free-standing `decode_string` from `epics_decode` for
+/// discoverability alongside the other decode helpers in this module.
+pub use crate::epics_decode::decode_string;
+
 /// PVD type codes from the specification
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,11 +138,87 @@ impl StructureDesc {
             fields: Vec::new(),
         }
     }
+
+    /// Look up a field by name.
+    pub fn field(&self, name: &str) -> Option<&FieldDesc> {
+        self.fields.iter().find(|f| f.name == name)
+    }
 }
 
 impl Default for StructureDesc {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl fmt::Display for StructureDesc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn write_indent(f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
+            for _ in 0..depth {
+                write!(f, "    ")?;
+            }
+            Ok(())
+        }
+
+        fn write_field_type(
+            f: &mut fmt::Formatter<'_>,
+            ft: &FieldType,
+            depth: usize,
+        ) -> fmt::Result {
+            match ft {
+                FieldType::Structure(desc) => write_structure(f, desc, depth),
+                FieldType::StructureArray(desc) => {
+                    write_structure(f, desc, depth)?;
+                    write!(f, "[]")
+                }
+                FieldType::Union(fields) => {
+                    writeln!(f, "union")?;
+                    for field in fields {
+                        write_indent(f, depth + 1)?;
+                        write!(f, "{} ", field.name)?;
+                        write_field_type(f, &field.field_type, depth + 1)?;
+                        writeln!(f)?;
+                    }
+                    Ok(())
+                }
+                FieldType::UnionArray(fields) => {
+                    writeln!(f, "union[]")?;
+                    for field in fields {
+                        write_indent(f, depth + 1)?;
+                        write!(f, "{} ", field.name)?;
+                        write_field_type(f, &field.field_type, depth + 1)?;
+                        writeln!(f)?;
+                    }
+                    Ok(())
+                }
+                other => write!(f, "{}", other.type_name()),
+            }
+        }
+
+        fn write_structure(
+            f: &mut fmt::Formatter<'_>,
+            desc: &StructureDesc,
+            depth: usize,
+        ) -> fmt::Result {
+            if let Some(id) = &desc.struct_id {
+                write!(f, "structure «{}»", id)?;
+            } else {
+                write!(f, "structure")?;
+            }
+            if desc.fields.is_empty() {
+                return Ok(());
+            }
+            writeln!(f)?;
+            for field in &desc.fields {
+                write_indent(f, depth + 1)?;
+                write!(f, "{} ", field.name)?;
+                write_field_type(f, &field.field_type, depth + 1)?;
+                writeln!(f)?;
+            }
+            Ok(())
+        }
+
+        write_structure(f, self, 0)
     }
 }
 

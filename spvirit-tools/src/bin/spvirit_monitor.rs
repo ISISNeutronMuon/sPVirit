@@ -1,3 +1,4 @@
+use std::ops::ControlFlow;
 use std::time::Duration;
 
 use argparse::{ArgumentParser, List, StoreTrue};
@@ -6,6 +7,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::runtime::Runtime;
 use tokio::time::interval;
 
+use spvirit_client::PvaClient;
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
 use spvirit_tools::spvirit_client::client::{
     encode_monitor_request, establish_channel, ChannelConn,
@@ -17,7 +19,42 @@ use spvirit_tools::spvirit_client::types::{PvGetError, PvGetOptions};
 use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
 use spvirit_codec::spvirit_encode::encode_control_message;
 
-async fn pvmonitor(opts: PvGetOptions, raw: bool, json: bool) -> Result<(), PvGetError> {
+/// High-level monitor path (no raw hex output).
+async fn pvmonitor_high_level(opts: PvGetOptions, json: bool) -> Result<(), PvGetError> {
+    let mut builder = PvaClient::builder()
+        .port(opts.tcp_port)
+        .udp_port(opts.udp_port)
+        .timeout(opts.timeout);
+    if opts.no_broadcast {
+        builder = builder.no_broadcast();
+    }
+    for ns in &opts.name_servers {
+        builder = builder.name_server(*ns);
+    }
+    if let Some(ref u) = opts.authnz_user {
+        builder = builder.authnz_user(u.clone());
+    }
+    if let Some(ref h) = opts.authnz_host {
+        builder = builder.authnz_host(h.clone());
+    }
+    let client = builder.build();
+
+    let pv_name = opts.pv_name.clone();
+    let mut render_opts = RenderOptions::default();
+    if json {
+        render_opts.format = OutputFormat::Json;
+    }
+
+    client
+        .pvmonitor(&pv_name, |value| {
+            println!("{}", format_output(&pv_name, value, &render_opts));
+            ControlFlow::Continue(())
+        })
+        .await
+}
+
+/// Low-level monitor path with raw hex output support.
+async fn pvmonitor_raw(opts: PvGetOptions, json: bool) -> Result<(), PvGetError> {
     let target = resolve_pv_server(&opts).await?;
 
     let conn = establish_channel(target, &opts).await?;
@@ -59,7 +96,6 @@ async fn pvmonitor(opts: PvGetOptions, raw: bool, json: bool) -> Result<(), PvGe
         }
     };
 
-    // Subscription is initially Stopped. Send start request (subcommand 0x44).
     let mon_start = encode_monitor_request(sid, ioid, 0x44, &[], version, is_be);
     stream.write_all(&mon_start).await?;
 
@@ -96,10 +132,8 @@ async fn pvmonitor(opts: PvGetOptions, raw: bool, json: bool) -> Result<(), PvGe
                                 render_opts.format = OutputFormat::Json;
                             }
                             println!("{}", format_output(&opts.pv_name, &full, &render_opts));
-                            if raw {
-                                println!("raw_pva: {}", hex_encode(&bytes));
-                                println!("raw_pvd: {}", hex_encode(&op.body));
-                            }
+                            println!("raw_pva: {}", hex_encode(&bytes));
+                            println!("raw_pvd: {}", hex_encode(&op.body));
                         }
                         if op.subcmd == 0x10 {
                             return Ok(());
@@ -109,6 +143,14 @@ async fn pvmonitor(opts: PvGetOptions, raw: bool, json: bool) -> Result<(), PvGe
                 }
             }
         }
+    }
+}
+
+async fn pvmonitor(opts: PvGetOptions, raw: bool, json: bool) -> Result<(), PvGetError> {
+    if raw {
+        pvmonitor_raw(opts, json).await
+    } else {
+        pvmonitor_high_level(opts, json).await
     }
 }
 

@@ -94,12 +94,32 @@ fn encode_type_desc(field_type: &FieldType, is_be: bool) -> Vec<u8> {
 fn encode_scalar_value(value: &ScalarValue, is_be: bool) -> Vec<u8> {
     match value {
         ScalarValue::Bool(v) => vec![if *v { 1 } else { 0 }],
+        ScalarValue::I8(v) => vec![*v as u8],
+        ScalarValue::I16(v) => {
+            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+        }
         ScalarValue::I32(v) => {
             if is_be {
                 v.to_be_bytes().to_vec()
             } else {
                 v.to_le_bytes().to_vec()
             }
+        }
+        ScalarValue::I64(v) => {
+            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+        }
+        ScalarValue::U8(v) => vec![*v],
+        ScalarValue::U16(v) => {
+            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+        }
+        ScalarValue::U32(v) => {
+            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+        }
+        ScalarValue::U64(v) => {
+            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+        }
+        ScalarValue::F32(v) => {
+            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
         }
         ScalarValue::F64(v) => {
             if is_be {
@@ -219,7 +239,15 @@ fn encode_f64(value: f64, is_be: bool) -> Vec<u8> {
 pub fn nt_scalar_desc(value: &ScalarValue) -> StructureDesc {
     let value_type = match value {
         ScalarValue::Bool(_) => FieldType::Scalar(TypeCode::Boolean),
+        ScalarValue::I8(_) => FieldType::Scalar(TypeCode::Int8),
+        ScalarValue::I16(_) => FieldType::Scalar(TypeCode::Int16),
         ScalarValue::I32(_) => FieldType::Scalar(TypeCode::Int32),
+        ScalarValue::I64(_) => FieldType::Scalar(TypeCode::Int64),
+        ScalarValue::U8(_) => FieldType::Scalar(TypeCode::UInt8),
+        ScalarValue::U16(_) => FieldType::Scalar(TypeCode::UInt16),
+        ScalarValue::U32(_) => FieldType::Scalar(TypeCode::UInt32),
+        ScalarValue::U64(_) => FieldType::Scalar(TypeCode::UInt64),
+        ScalarValue::F32(_) => FieldType::Scalar(TypeCode::Float32),
         ScalarValue::F64(_) => FieldType::Scalar(TypeCode::Float64),
         ScalarValue::Str(_) => FieldType::String,
     };
@@ -960,9 +988,49 @@ fn encode_attribute_variant(attr: &NtAttribute, is_be: bool) -> Vec<u8> {
             out.push(if *v { 1 } else { 0 });
             out
         }
+        ScalarValue::I8(v) => {
+            let mut out = vec![TypeCode::Int8 as u8];
+            out.push(*v as u8);
+            out
+        }
+        ScalarValue::I16(v) => {
+            let mut out = vec![TypeCode::Int16 as u8];
+            out.extend_from_slice(&if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() });
+            out
+        }
         ScalarValue::I32(v) => {
             let mut out = vec![TypeCode::Int32 as u8];
             out.extend_from_slice(&encode_i32(*v, is_be));
+            out
+        }
+        ScalarValue::I64(v) => {
+            let mut out = vec![TypeCode::Int64 as u8];
+            out.extend_from_slice(&encode_i64(*v, is_be));
+            out
+        }
+        ScalarValue::U8(v) => {
+            let mut out = vec![TypeCode::UInt8 as u8];
+            out.push(*v);
+            out
+        }
+        ScalarValue::U16(v) => {
+            let mut out = vec![TypeCode::UInt16 as u8];
+            out.extend_from_slice(&if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() });
+            out
+        }
+        ScalarValue::U32(v) => {
+            let mut out = vec![TypeCode::UInt32 as u8];
+            out.extend_from_slice(&if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() });
+            out
+        }
+        ScalarValue::U64(v) => {
+            let mut out = vec![TypeCode::UInt64 as u8];
+            out.extend_from_slice(&if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() });
+            out
+        }
+        ScalarValue::F32(v) => {
+            let mut out = vec![TypeCode::Float32 as u8];
+            out.extend_from_slice(&if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() });
             out
         }
         ScalarValue::F64(v) => {
@@ -1063,6 +1131,104 @@ pub fn encode_nt_payload_bitset_parts(payload: &NtPayload, is_be: bool) -> (Vec<
         encode_structure_bitset(&desc, is_be),
         encode_nt_payload_full(payload, is_be),
     )
+}
+
+// ---------------------------------------------------------------------------
+// Generic DecodedValue → wire bytes encoder
+// ---------------------------------------------------------------------------
+
+use crate::spvd_decode::DecodedValue;
+
+/// Encode a `DecodedValue` back to PVA wire bytes.
+pub fn encode_decoded_value(val: &DecodedValue, is_be: bool) -> Vec<u8> {
+    match val {
+        DecodedValue::Null => Vec::new(),
+        DecodedValue::Boolean(v) => vec![if *v { 1 } else { 0 }],
+        DecodedValue::Int8(v) => vec![*v as u8],
+        DecodedValue::Int16(v) => {
+            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+        }
+        DecodedValue::Int32(v) => encode_i32(*v, is_be),
+        DecodedValue::Int64(v) => encode_i64(*v, is_be),
+        DecodedValue::UInt8(v) => vec![*v],
+        DecodedValue::UInt16(v) => {
+            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+        }
+        DecodedValue::UInt32(v) => {
+            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+        }
+        DecodedValue::UInt64(v) => {
+            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+        }
+        DecodedValue::Float32(v) => {
+            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+        }
+        DecodedValue::Float64(v) => encode_f64(*v, is_be),
+        DecodedValue::String(v) => encode_string_pvd(v, is_be),
+        DecodedValue::Array(arr) => {
+            let mut out = encode_size_pvd(arr.len(), is_be);
+            for item in arr {
+                out.extend_from_slice(&encode_decoded_value(item, is_be));
+            }
+            out
+        }
+        DecodedValue::Structure(fields) => {
+            let mut out = Vec::new();
+            for (_name, value) in fields {
+                out.extend_from_slice(&encode_decoded_value(value, is_be));
+            }
+            out
+        }
+        DecodedValue::Raw(data) => data.clone(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// pvRequest builder
+// ---------------------------------------------------------------------------
+
+/// Build a pvRequest structure for the given top-level field names.
+///
+/// Produces the byte sequence that a client sends inside an INIT request to
+/// select which fields to subscribe to, e.g.
+/// `encode_pv_request(&["value", "alarm", "timeStamp"], false)` produces the
+/// equivalent of `field(value,alarm,timeStamp)`.
+///
+/// The output is the *full* type-described pvRequest structure: a `0xFD` /
+/// `0x80` tag followed by the structure descriptor and empty-struct field values.
+pub fn encode_pv_request(fields: &[&str], is_be: bool) -> Vec<u8> {
+    // Build inner "field" structure descriptor: each requested field is an
+    // empty sub-structure (no fields).
+    let inner_fields: Vec<FieldDesc> = fields
+        .iter()
+        .map(|name| FieldDesc {
+            name: name.to_string(),
+            field_type: FieldType::Structure(StructureDesc {
+                struct_id: None,
+                fields: Vec::new(),
+            }),
+        })
+        .collect();
+
+    let field_desc = StructureDesc {
+        struct_id: None,
+        fields: inner_fields,
+    };
+
+    let pv_request_desc = StructureDesc {
+        struct_id: None,
+        fields: vec![FieldDesc {
+            name: "field".to_string(),
+            field_type: FieldType::Structure(field_desc),
+        }],
+    };
+
+    let mut out = Vec::new();
+    out.push(0x80); // structure tag
+    out.extend_from_slice(&encode_structure_desc(&pv_request_desc, is_be));
+    // Values: the field structure and all its children are empty structs, so
+    // there are no value bytes to write.
+    out
 }
 
 #[cfg(test)]

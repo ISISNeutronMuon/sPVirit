@@ -1,3 +1,3 @@
 [workspace]
-members = ["spvirit-types", "spvirit-codec", "spvirit-tools"]
+members = ["spvirit-types", "spvirit-codec", "spvirit-client", "spvirit-server", "spvirit-tools"]
 resolver = "2"

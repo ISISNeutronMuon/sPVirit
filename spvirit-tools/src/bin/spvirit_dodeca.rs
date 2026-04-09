@@ -570,7 +570,7 @@ async fn handle_connection(
 
         // Connection validation (cmd=1): respond with CONNECTION_VALIDATED.
         if cmd_code == 1 {
-            let resp = encode_connection_validated(version, is_be);
+            let resp = encode_connection_validated(true, version, is_be);
             state.send_msg(conn_id, resp).await;
             continue;
         }

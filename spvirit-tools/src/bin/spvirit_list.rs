@@ -4,7 +4,7 @@ use argparse::{ArgumentParser, Store};
 use tokio::runtime::Runtime;
 
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
-use spvirit_tools::spvirit_client::explore::list_pvs_with_fallback;
+use spvirit_client::pvlist::pvlist_with_fallback;
 use spvirit_tools::spvirit_client::search::{
     build_search_targets, discover_servers, DiscoveredServer,
 };
@@ -106,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(Ok)
         .unwrap_or_else(|| parse_server_target(target.trim(), opts.tcp_port))?;
 
-    let (pv_names, _source) = rt.block_on(list_pvs_with_fallback(&opts, server_addr))?;
+    let (pv_names, _source) = rt.block_on(pvlist_with_fallback(&opts, server_addr))?;
     for name in pv_names {
         println!("{}", name);
     }

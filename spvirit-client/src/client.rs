@@ -2,10 +2,10 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
-use crate::spvirit_client::auth::{resolved_authnz_host, resolved_authnz_user};
-use crate::spvirit_client::search::resolve_pv_server;
-use crate::spvirit_client::transport::{read_packet, read_until};
-use crate::spvirit_client::types::{PvGetError, PvGetOptions, PvGetResult};
+use crate::auth::{resolved_authnz_host, resolved_authnz_user};
+use crate::search::resolve_pv_server;
+use crate::transport::{read_packet, read_until};
+use crate::types::{PvGetError, PvGetOptions, PvGetResult};
 use spvirit_codec::epics_decode::{
     decode_op_response_status as codec_decode_op_response_status, PvaPacket, PvaPacketCommand,
 };
@@ -16,7 +16,7 @@ pub use spvirit_codec::spvirit_encode::{
 use spvirit_codec::spvirit_encode::encode_client_connection_validation;
 
 pub fn build_client_validation(
-    opts: &crate::spvirit_client::types::PvGetOptions,
+    opts: &crate::types::PvGetOptions,
     version: u8,
     is_be: bool,
 ) -> Vec<u8> {
@@ -251,13 +251,14 @@ mod tests {
 
     #[test]
     fn encode_decode_get_field_request_roundtrip() {
-        let msg = encode_get_field_request(7, Some("*"), 2, false);
+        let msg = encode_get_field_request(7, 1, Some("*"), 2, false);
         let mut pkt = PvaPacket::new(&msg);
         let cmd = pkt.decode_payload().expect("decoded");
         match cmd {
             PvaPacketCommand::GetField(payload) => {
                 assert!(!payload.is_server);
-                assert_eq!(payload.cid, 7);
+                assert_eq!(payload.sid, Some(7));
+                assert_eq!(payload.ioid, Some(1));
                 assert_eq!(payload.field_name.as_deref(), Some("*"));
             }
             other => panic!("unexpected decode: {:?}", other),
@@ -266,13 +267,14 @@ mod tests {
 
     #[test]
     fn encode_decode_get_field_request_empty_field_roundtrip() {
-        let msg = encode_get_field_request(7, None, 2, false);
+        let msg = encode_get_field_request(7, 1, None, 2, false);
         let mut pkt = PvaPacket::new(&msg);
         let cmd = pkt.decode_payload().expect("decoded");
         match cmd {
             PvaPacketCommand::GetField(payload) => {
                 assert!(!payload.is_server);
-                assert_eq!(payload.cid, 7);
+                assert_eq!(payload.sid, Some(7));
+                assert_eq!(payload.ioid, Some(1));
                 assert_eq!(payload.field_name.as_deref(), Some(""));
             }
             other => panic!("unexpected decode: {:?}", other),

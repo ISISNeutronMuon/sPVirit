@@ -458,6 +458,39 @@ impl RecordInstance {
                     true
                 }
             }
+            // Handle all remaining numeric ScalarValue variants by coercing to
+            // the target's type via f64.
+            (target, other) => {
+                let as_f64 = match &other {
+                    ScalarValue::I8(v) => *v as f64,
+                    ScalarValue::I16(v) => *v as f64,
+                    ScalarValue::I64(v) => *v as f64,
+                    ScalarValue::U8(v) => *v as f64,
+                    ScalarValue::U16(v) => *v as f64,
+                    ScalarValue::U32(v) => *v as f64,
+                    ScalarValue::U64(v) => *v as f64,
+                    ScalarValue::F32(v) => *v as f64,
+                    _ => return false,
+                };
+                match target {
+                    ScalarValue::Bool(current) => {
+                        let next = as_f64 != 0.0;
+                        if *current == next { false } else { *current = next; true }
+                    }
+                    ScalarValue::I32(current) => {
+                        let next = as_f64 as i32;
+                        if *current == next { false } else { *current = next; true }
+                    }
+                    ScalarValue::F64(current) => {
+                        if (*current - as_f64).abs() < f64::EPSILON { false } else { *current = as_f64; true }
+                    }
+                    ScalarValue::Str(current) => {
+                        let next = as_f64.to_string();
+                        if *current == next { false } else { *current = next; true }
+                    }
+                    _ => false,
+                }
+            }
         };
         if changed && compute_alarms {
             nt.update_alarm_from_value();
