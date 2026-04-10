@@ -785,7 +785,6 @@ pub async fn resolve_pv_server(opts: &PvGetOptions) -> Result<SocketAddr, PvGetE
     let timeout_dur = opts.timeout;
     let debug_enabled = opts.debug;
     let udp_port = opts.udp_port;
-    let tcp_port = opts.tcp_port;
 
     let mut set = tokio::task::JoinSet::new();
 
@@ -793,7 +792,7 @@ pub async fn resolve_pv_server(opts: &PvGetOptions) -> Result<SocketAddr, PvGetE
         let pv = pv.clone();
         set.spawn(async move {
             let addr = search_pv_tcp(&pv, ns, timeout_dur, debug_enabled).await?;
-            Ok::<SocketAddr, PvGetError>(SocketAddr::new(addr.ip(), tcp_port))
+            Ok::<SocketAddr, PvGetError>(addr)
         });
     }
 
@@ -802,7 +801,7 @@ pub async fn resolve_pv_server(opts: &PvGetOptions) -> Result<SocketAddr, PvGetE
         let targets = targets.clone();
         set.spawn(async move {
             let addr = search_pv(&pv, udp_port, timeout_dur, &targets, debug_enabled).await?;
-            Ok(SocketAddr::new(addr.ip(), tcp_port))
+            Ok(addr)
         });
     }
 

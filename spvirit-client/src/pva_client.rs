@@ -38,8 +38,6 @@ use crate::types::{PvGetError, PvGetResult, PvOptions};
 const PVA_VERSION: u8 = 2;
 /// QoS / subcommand flag: INIT.
 const QOS_INIT: u8 = 0x08;
-/// Default pipeline window for monitor subscriptions.
-const PIPELINE_WINDOW: u32 = 16;
 
 static NEXT_IOID: AtomicU32 = AtomicU32::new(1);
 fn alloc_ioid() -> u32 {
@@ -365,12 +363,11 @@ impl PvaClient {
 
         let field_desc = decode_init_introspection(&init_bytes, "MONITOR")?;
 
-        // Start subscription (pipeline)
-        let start = encode_monitor_pipeline_start(sid, ioid, PIPELINE_WINDOW, is_be);
+        // Start subscription (non-pipeline: START 0x04 + GET 0x40 = 0x44)
+        let start = encode_monitor_request(sid, ioid, 0x44, &[], PVA_VERSION, is_be);
         stream.write_all(&start).await?;
 
         // Event loop — with echo keepalive and timeout resilience
-        let mut credits = PIPELINE_WINDOW;
         let mut echo_interval = interval(Duration::from_secs(10));
         let mut echo_token: u32 = 1;
 
@@ -398,14 +395,6 @@ impl PvaClient {
                                 if callback(&decoded).is_break() {
                                     return Ok(());
                                 }
-                            }
-
-                            credits -= 1;
-                            if credits <= 4 {
-                                let msg =
-                                    encode_monitor_pipeline_start(sid, ioid, PIPELINE_WINDOW, is_be);
-                                stream.write_all(&msg).await?;
-                                credits += PIPELINE_WINDOW;
                             }
                         }
                     }
@@ -600,16 +589,6 @@ fn decode_init_introspection(raw: &[u8], label: &str) -> Result<StructureDesc, P
             "unexpected {label} init response"
         ))),
     }
-}
-
-/// Encode a MONITOR pipeline start/ack message (subcmd 0x80).
-fn encode_monitor_pipeline_start(sid: u32, ioid: u32, nfree: u32, is_be: bool) -> Vec<u8> {
-    let extra = if is_be {
-        nfree.to_be_bytes()
-    } else {
-        nfree.to_le_bytes()
-    };
-    encode_monitor_request(sid, ioid, 0x80, &extra, PVA_VERSION, is_be)
 }
 
 #[cfg(test)]
