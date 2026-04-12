@@ -1024,6 +1024,7 @@ pub async fn handle_connection<S: PvStore>(
                             conn_id,
                             encode_op_error(
                                 payload.command,
+                                payload.subcmd,
                                 ioid,
                                 "Unknown SID",
                                 version,
@@ -1046,6 +1047,7 @@ pub async fn handle_connection<S: PvStore>(
                                     conn_id,
                                     encode_op_error(
                                         payload.command,
+                                        payload.subcmd,
                                         ioid,
                                         "PV not found",
                                         version,
@@ -1093,6 +1095,7 @@ pub async fn handle_connection<S: PvStore>(
                                         conn_id,
                                         encode_op_error(
                                             payload.command,
+                                            payload.subcmd,
                                             ioid,
                                             "PV not found",
                                             version,
@@ -1164,6 +1167,7 @@ pub async fn handle_connection<S: PvStore>(
                                             conn_id,
                                             encode_op_error(
                                                 payload.command,
+                                                payload.subcmd,
                                                 ioid,
                                                 "PV not found",
                                                 version,
@@ -1183,6 +1187,7 @@ pub async fn handle_connection<S: PvStore>(
                                             conn_id,
                                             encode_op_error(
                                                 payload.command,
+                                                payload.subcmd,
                                                 ioid,
                                                 "PUT without init",
                                                 version,
@@ -1201,7 +1206,7 @@ pub async fn handle_connection<S: PvStore>(
                                     }
                                     Err(msg) => {
                                         let resp = encode_op_put_status_response(
-                                            ioid, 0x00, &msg, version, is_be,
+                                            ioid, payload.subcmd, &msg, version, is_be,
                                         );
                                         state.registry.send_msg(conn_id, resp).await;
                                         continue;
@@ -1214,8 +1219,13 @@ pub async fn handle_connection<S: PvStore>(
                                     ioid,
                                     payload.body.len()
                                 );
+                                let resp = encode_op_put_status_response(
+                                    ioid, payload.subcmd, "cannot decode PUT body", version, is_be,
+                                );
+                                state.registry.send_msg(conn_id, resp).await;
+                                continue;
                             }
-                            let resp = encode_op_put_response(ioid, version, is_be);
+                            let resp = encode_op_put_response(ioid, payload.subcmd, version, is_be);
                             state.registry.send_msg(conn_id, resp).await;
                             debug!(
                                 "Conn {}: put data pv='{}' ioid={}",
@@ -1233,6 +1243,7 @@ pub async fn handle_connection<S: PvStore>(
                                         conn_id,
                                         encode_op_error(
                                             payload.command,
+                                            payload.subcmd,
                                             ioid,
                                             "PV not found",
                                             version,
@@ -1275,6 +1286,7 @@ pub async fn handle_connection<S: PvStore>(
                                             conn_id,
                                             encode_op_error(
                                                 payload.command,
+                                                payload.subcmd,
                                                 ioid,
                                                 "PUT_GET without init",
                                                 version,
@@ -1306,6 +1318,11 @@ pub async fn handle_connection<S: PvStore>(
                                     ioid,
                                     payload.body.len()
                                 );
+                                let resp = encode_op_put_get_data_error_response(
+                                    ioid, "cannot decode PUT body", version, is_be,
+                                );
+                                state.registry.send_msg(conn_id, resp).await;
+                                continue;
                             }
                             if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
                                 let resp = encode_op_put_get_data_response_payload(
@@ -1319,6 +1336,7 @@ pub async fn handle_connection<S: PvStore>(
                                         conn_id,
                                         encode_op_error(
                                             payload.command,
+                                            payload.subcmd,
                                             ioid,
                                             "PV not found",
                                             version,
@@ -1343,6 +1361,7 @@ pub async fn handle_connection<S: PvStore>(
                                         conn_id,
                                         encode_op_error(
                                             payload.command,
+                                            payload.subcmd,
                                             ioid,
                                             "PV not found",
                                             version,
@@ -1533,6 +1552,7 @@ pub async fn handle_connection<S: PvStore>(
                                     conn_id,
                                     encode_op_error(
                                         payload.command,
+                                        payload.subcmd,
                                         ioid,
                                         "Operation not supported",
                                         version,
@@ -1549,6 +1569,7 @@ pub async fn handle_connection<S: PvStore>(
                                 conn_id,
                                 encode_op_error(
                                     payload.command,
+                                    payload.subcmd,
                                     ioid,
                                     "Operation not supported",
                                     version,
@@ -1564,6 +1585,7 @@ pub async fn handle_connection<S: PvStore>(
                                 conn_id,
                                 encode_op_error(
                                     payload.command,
+                                    payload.subcmd,
                                     ioid,
                                     "Operation not supported",
                                     version,

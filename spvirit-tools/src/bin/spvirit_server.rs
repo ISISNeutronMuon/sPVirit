@@ -770,7 +770,7 @@ async fn handle_connection(
                     send_msg(
                         &state,
                         conn_id,
-                        encode_op_error(payload.command, ioid, "Unknown SID", version, is_be),
+                        encode_op_error(payload.command, payload.subcmd, ioid, "Unknown SID", version, is_be),
                     )
                     .await;
                     continue;
@@ -787,6 +787,7 @@ async fn handle_connection(
                                 conn_id,
                                 encode_op_error(
                                     payload.command,
+                                    payload.subcmd,
                                     ioid,
                                     "PV not found",
                                     version,
@@ -826,6 +827,7 @@ async fn handle_connection(
                                     conn_id,
                                     encode_op_error(
                                         payload.command,
+                                        payload.subcmd,
                                         ioid,
                                         "PV not found",
                                         version,
@@ -891,6 +893,7 @@ async fn handle_connection(
                                         conn_id,
                                         encode_op_error(
                                             payload.command,
+                                            payload.subcmd,
                                             ioid,
                                             "PV not found",
                                             version,
@@ -909,6 +912,7 @@ async fn handle_connection(
                                         conn_id,
                                         encode_op_error(
                                             payload.command,
+                                            payload.subcmd,
                                             ioid,
                                             "PUT without init",
                                             version,
@@ -939,7 +943,7 @@ async fn handle_connection(
                                     payload.body.len()
                                 );
                             }
-                            let resp = encode_op_put_response(ioid, version, is_be);
+                            let resp = encode_op_put_response(ioid, payload.subcmd, version, is_be);
                             send_msg(&state, conn_id, resp).await;
                             debug!("Conn {}: put data pv='{}' ioid={}", conn_id, pv_name, ioid);
                         }
@@ -953,6 +957,7 @@ async fn handle_connection(
                                     conn_id,
                                     encode_op_error(
                                         payload.command,
+                                        payload.subcmd,
                                         ioid,
                                         "PV not found",
                                         version,
@@ -993,6 +998,7 @@ async fn handle_connection(
                                         conn_id,
                                         encode_op_error(
                                             payload.command,
+                                            payload.subcmd,
                                             ioid,
                                             "PUT_GET without init",
                                             version,
@@ -1034,6 +1040,7 @@ async fn handle_connection(
                                     conn_id,
                                     encode_op_error(
                                         payload.command,
+                                        payload.subcmd,
                                         ioid,
                                         "PV not found",
                                         version,
@@ -1057,6 +1064,7 @@ async fn handle_connection(
                                     conn_id,
                                     encode_op_error(
                                         payload.command,
+                                        payload.subcmd,
                                         ioid,
                                         "PV not found",
                                         version,
@@ -1231,6 +1239,7 @@ async fn handle_connection(
                                 conn_id,
                                 encode_op_error(
                                     payload.command,
+                                    payload.subcmd,
                                     ioid,
                                     "Operation not supported",
                                     version,
@@ -1246,6 +1255,7 @@ async fn handle_connection(
                             conn_id,
                             encode_op_error(
                                 payload.command,
+                                payload.subcmd,
                                 ioid,
                                 "Operation not supported",
                                 version,
@@ -1260,6 +1270,7 @@ async fn handle_connection(
                             conn_id,
                             encode_op_error(
                                 payload.command,
+                                payload.subcmd,
                                 ioid,
                                 "Operation not supported",
                                 version,

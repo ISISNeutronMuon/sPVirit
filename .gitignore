@@ -24,3 +24,5 @@ tmp/
 
 # Cargo patch overrides (local dev only)
 .cargo/config.toml
+
+spvirit-py/

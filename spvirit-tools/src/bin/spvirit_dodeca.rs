@@ -611,7 +611,7 @@ async fn handle_connection(
                     state
                         .send_msg(
                             conn_id,
-                            encode_op_error(op.command, ioid, "Unknown SID", version, is_be),
+                            encode_op_error(op.command, op.subcmd, ioid, "Unknown SID", version, is_be),
                         )
                         .await;
                     continue;
@@ -652,7 +652,7 @@ async fn handle_connection(
                         if !state.is_speed_pv(&pv_name) {
                             state.send_msg(
                                 conn_id,
-                                encode_op_error(op.command, ioid, "PUT not supported on this PV", version, is_be),
+                                encode_op_error(op.command, op.subcmd, ioid, "PUT not supported on this PV", version, is_be),
                             ).await;
                             continue;
                         }
@@ -674,7 +674,7 @@ async fn handle_connection(
                                 // Notify speed monitors
                                 notify_speed_monitors(&state, &pv_name).await;
                             }
-                            let resp = encode_op_put_response(ioid, version, is_be);
+                            let resp = encode_op_put_response(ioid, op.subcmd, version, is_be);
                             state.send_msg(conn_id, resp).await;
                         }
                     }
@@ -745,6 +745,7 @@ async fn handle_connection(
                                 conn_id,
                                 encode_op_error(
                                     op.command,
+                                    op.subcmd,
                                     ioid,
                                     "Unsupported operation",
                                     version,

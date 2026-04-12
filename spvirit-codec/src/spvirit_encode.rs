@@ -658,14 +658,14 @@ pub fn encode_op_put_get_data_response_payload(
     out
 }
 
-pub fn encode_op_put_response(ioid: u32, version: u8, is_be: bool) -> Vec<u8> {
+pub fn encode_op_put_response(ioid: u32, subcmd: u8, version: u8, is_be: bool) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&if is_be {
         ioid.to_be_bytes()
     } else {
         ioid.to_le_bytes()
     });
-    payload.push(0x00);
+    payload.push(subcmd);
     payload.extend_from_slice(&encode_status_ok());
     let mut out = encode_header(true, is_be, false, version, 11, payload.len() as u32);
     out.extend_from_slice(&payload);
@@ -819,15 +819,15 @@ pub fn encode_destroy_channel_response(sid: u32, cid: u32, version: u8, is_be: b
     out
 }
 
-pub fn encode_op_error(command: u8, ioid: u32, message: &str, version: u8, is_be: bool) -> Vec<u8> {
+pub fn encode_op_error(command: u8, subcmd: u8, ioid: u32, message: &str, version: u8, is_be: bool) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&if is_be {
         ioid.to_be_bytes()
     } else {
         ioid.to_le_bytes()
     });
-    payload.push(0x08);
-    payload.push(0x01); // error
+    payload.push(subcmd);
+    payload.push(0x02); // ERROR
     payload.extend_from_slice(&encode_string_pva(message, is_be));
     payload.extend_from_slice(&encode_string_pva("", is_be));
     let mut out = encode_header(true, is_be, false, version, command, payload.len() as u32);
