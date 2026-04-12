@@ -7,7 +7,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::runtime::Runtime;
 use tokio::time::interval;
 
-use spvirit_client::PvaClient;
+use spvirit_client::client_from_opts;
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
 use spvirit_tools::spvirit_client::client::{
     encode_monitor_request, establish_channel, ChannelConn,
@@ -21,23 +21,7 @@ use spvirit_codec::spvirit_encode::encode_control_message;
 
 /// High-level monitor path (no raw hex output).
 async fn pvmonitor_high_level(opts: PvGetOptions, json: bool) -> Result<(), PvGetError> {
-    let mut builder = PvaClient::builder()
-        .port(opts.tcp_port)
-        .udp_port(opts.udp_port)
-        .timeout(opts.timeout);
-    if opts.no_broadcast {
-        builder = builder.no_broadcast();
-    }
-    for ns in &opts.name_servers {
-        builder = builder.name_server(*ns);
-    }
-    if let Some(ref u) = opts.authnz_user {
-        builder = builder.authnz_user(u.clone());
-    }
-    if let Some(ref h) = opts.authnz_host {
-        builder = builder.authnz_host(h.clone());
-    }
-    let client = builder.build();
+    let client = client_from_opts(&opts);
 
     let pv_name = opts.pv_name.clone();
     let mut render_opts = RenderOptions::default();
@@ -184,21 +168,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rt = Runtime::new()?;
     rt.block_on(async move {
-        let mut handles = Vec::new();
+        let mut set = tokio::task::JoinSet::new();
         for pv in pv_names {
             let mut opts = base_opts.clone();
             opts.pv_name = pv.clone();
 
             let pv_label = pv;
-            handles.push(tokio::spawn(async move {
+            set.spawn(async move {
                 let res = pvmonitor(opts, raw, json).await;
                 (pv_label, res)
-            }));
+            });
         }
 
         let mut had_error = false;
-        for handle in handles {
-            match handle.await {
+        while let Some(result) = set.join_next().await {
+            match result {
                 Ok((pv, Ok(()))) => {
                     eprintln!("pvmonitor {}: stopped", pv);
                 }

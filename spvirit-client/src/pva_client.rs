@@ -62,6 +62,10 @@ pub struct PvaClientBuilder {
     name_servers: Vec<SocketAddr>,
     authnz_user: Option<String>,
     authnz_host: Option<String>,
+    server_addr: Option<SocketAddr>,
+    search_addr: Option<std::net::IpAddr>,
+    bind_addr: Option<std::net::IpAddr>,
+    debug: bool,
 }
 
 impl PvaClientBuilder {
@@ -74,6 +78,10 @@ impl PvaClientBuilder {
             name_servers: Vec::new(),
             authnz_user: None,
             authnz_host: None,
+            server_addr: None,
+            search_addr: None,
+            bind_addr: None,
+            debug: false,
         }
     }
 
@@ -119,6 +127,30 @@ impl PvaClientBuilder {
         self
     }
 
+    /// Set an explicit server address, bypassing UDP search.
+    pub fn server_addr(mut self, addr: SocketAddr) -> Self {
+        self.server_addr = Some(addr);
+        self
+    }
+
+    /// Set the search target IP address.
+    pub fn search_addr(mut self, addr: std::net::IpAddr) -> Self {
+        self.search_addr = Some(addr);
+        self
+    }
+
+    /// Set the local bind IP for UDP search.
+    pub fn bind_addr(mut self, addr: std::net::IpAddr) -> Self {
+        self.bind_addr = Some(addr);
+        self
+    }
+
+    /// Enable debug logging.
+    pub fn debug(mut self) -> Self {
+        self.debug = true;
+        self
+    }
+
     /// Build the [`PvaClient`].
     pub fn build(self) -> PvaClient {
         PvaClient {
@@ -129,6 +161,10 @@ impl PvaClientBuilder {
             name_servers: self.name_servers,
             authnz_user: self.authnz_user,
             authnz_host: self.authnz_host,
+            server_addr: self.server_addr,
+            search_addr: self.search_addr,
+            bind_addr: self.bind_addr,
+            debug: self.debug,
         }
     }
 }
@@ -153,6 +189,10 @@ pub struct PvaClient {
     name_servers: Vec<SocketAddr>,
     authnz_user: Option<String>,
     authnz_host: Option<String>,
+    server_addr: Option<SocketAddr>,
+    search_addr: Option<std::net::IpAddr>,
+    bind_addr: Option<std::net::IpAddr>,
+    debug: bool,
 }
 
 impl PvaClient {
@@ -171,6 +211,10 @@ impl PvaClient {
         o.name_servers.clone_from(&self.name_servers);
         o.authnz_user.clone_from(&self.authnz_user);
         o.authnz_host.clone_from(&self.authnz_host);
+        o.server_addr = self.server_addr;
+        o.search_addr = self.search_addr;
+        o.bind_addr = self.bind_addr;
+        o.debug = self.debug;
         o
     }
 
@@ -560,6 +604,18 @@ pub fn client_from_opts(opts: &PvOptions) -> PvaClient {
     }
     if let Some(ref h) = opts.authnz_host {
         b = b.authnz_host(h.clone());
+    }
+    if let Some(addr) = opts.server_addr {
+        b = b.server_addr(addr);
+    }
+    if let Some(addr) = opts.search_addr {
+        b = b.search_addr(addr);
+    }
+    if let Some(addr) = opts.bind_addr {
+        b = b.bind_addr(addr);
+    }
+    if opts.debug {
+        b = b.debug();
     }
     b.build()
 }

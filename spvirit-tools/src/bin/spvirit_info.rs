@@ -38,7 +38,7 @@ fn should_retry_get_field_without_name(err: &PvGetError) -> bool {
                 | std::io::ErrorKind::ConnectionReset
                 | std::io::ErrorKind::BrokenPipe
         ),
-        PvGetError::Timeout("read_until") => true,
+        PvGetError::Timeout("read_until") | PvGetError::Timeout("read header") => true,
         _ => false,
     }
 }
