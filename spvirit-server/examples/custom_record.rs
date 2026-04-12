@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             inp: None,
             siml: None,
             siol: None,
-            simm: false,
+            simm:true,
         },
         raw_fields: HashMap::new(),
     };

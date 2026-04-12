@@ -345,7 +345,7 @@ static TICK: AtomicU64 = AtomicU64::new(0);
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = PvaServer::builder()
         .ai("SIM:TEMPERATURE", 22.5)
-        .scan("SIM:TEMPERATURE", Duration::from_secs(1), |_pv| {
+        .scan("SIM:TEMPERATURE", Duration::from_millis(100), |_pv| {
             let t = TICK.fetch_add(1, Ordering::Relaxed) as f64;
             ScalarValue::F64(22.5 + (t * 0.1).sin())
         })
@@ -361,7 +361,7 @@ cargo run -p spvirit-server --example scan_callback
 #### Serving a waveform (array PV)
 ```rust
 use spvirit_server::PvaServer;
-use spvirit_types::{ScalarArrayValue, ScalarValue};
+use spvirit_types::ScalarArrayValue;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -371,10 +371,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let store = server.store().clone();
     tokio::spawn(async move {
+        const N: usize = 1024;
         let mut tick = 0u64;
         loop {
-            let first_val = ((tick as f64) * 0.01).sin();
-            store.set_value("SIM:SPECTRUM", ScalarValue::F64(first_val)).await;
+            let phase = (tick as f64) * 0.03;
+            let samples = (0..N)
+                .map(|i| {
+                    let x = i as f64;
+                    (phase + x * 0.02).sin() + 0.25 * (phase * 0.5 + x * 0.05).cos()
+                })
+                .collect::<Vec<_>>();
+            store
+                .set_array_value("SIM:SPECTRUM", ScalarArrayValue::F64(samples))
+                .await;
             tick += 1;
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
@@ -431,11 +440,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 cargo run -p spvirit-server --example custom_record
 ```
 
+#### Lower-level NT put/get (`nt_put_get`)
+
+Use this example when you want full Normative Type control rather than
+record convenience helpers.
+
+- Run: `cargo run -p spvirit-server --example nt_put_get`
+- Source: `spvirit-server/examples/nt_put_get.rs`
+
+When to use NT-level APIs (`put_nt` / `get_nt`):
+
+- You need to write/read full `NtPayload` (not just `.value`).
+- You need to set alarm severity/status/message explicitly.
+- You need dynamic metadata updates (for example
+    `display_description`/ADesc-style text).
+- You are working with richer payloads like `NtTable` or `NtNdArray`.
+
+When to use record/value APIs (`set_value` / `set_array_value`):
+
+- You mainly update scalar or array values.
+- You want less boilerplate and softIOC-style ergonomics.
+- You do not need to manually manage NT metadata fields each update.
+
 ### Running the examples
 
-All examples live in `spvirit-client/examples/` and `spvirit-server/examples/` and can be run directly from the repo:
+All examples can be run directly from the repo:
 
 ```bash
+# Codec examples
+cargo run -p spvirit-codec --example decode_packet          # decode captured packet bytes
+
 # Client examples (need a running PVAccess server on the network)
 cargo run -p spvirit-client --example pvget            # fetch a PV
 cargo run -p spvirit-client --example pvput            # write a PV
@@ -443,11 +477,20 @@ cargo run -p spvirit-client --example pvmonitor         # subscribe to updates
 
 # Server examples (start a PVAccess server on localhost:5075)
 cargo run -p spvirit-server --example simple_server     # minimal server
+cargo run -p spvirit-server --example mailbox           # p4p SharedPV mailbox equivalent
 cargo run -p spvirit-server --example on_put            # on_put callback
 cargo run -p spvirit-server --example store_runtime     # runtime get/set via store()
+cargo run -p spvirit-server --example get_snapshot      # read full NtPayload snapshots
+cargo run -p spvirit-server --example nt_put_get        # lower-level NtPayload put/get
+cargo run -p spvirit-server --example exotic_nt         # enum-like scalar + NTTable + NTNDArray
 cargo run -p spvirit-server --example scan_callback     # periodic scan
 cargo run -p spvirit-server --example waveform          # array PV
+cargo run -p spvirit-server --example linked_calc       # linked/calculated records
 cargo run -p spvirit-server --example custom_record     # hand-built RecordInstance
+
+# Tools crate examples
+cargo run -p spvirit-tools --example pvget_example      # minimal use of tool-style pvget helper
+cargo run -p spvirit-tools --example search_example     # minimal PV search helper
 ```
 
 **Quick demo — server + client in two terminals:**

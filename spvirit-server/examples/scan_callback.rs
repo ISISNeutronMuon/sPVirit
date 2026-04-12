@@ -9,7 +9,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let server = PvaServer::builder()
         .ai("SIM:TEMPERATURE", 22.5)
-        .scan("SIM:TEMPERATURE", Duration::from_secs(1), |_pv| {
+        .scan("SIM:TEMPERATURE", Duration::from_millis(100), |_pv| {
             let t = TICK.fetch_add(1, Ordering::Relaxed) as f64;
             ScalarValue::F64(22.5 + (t * 0.1).sin())
         })

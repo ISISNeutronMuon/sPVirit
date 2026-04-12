@@ -497,6 +497,98 @@ impl RecordInstance {
         }
         changed
     }
+
+    pub fn set_array_value(&mut self, value: ScalarArrayValue) -> bool {
+        let (nt, nord, nelm) = match &mut self.data {
+            RecordData::Waveform { nt, nord, nelm, .. }
+            | RecordData::Aai { nt, nord, nelm, .. }
+            | RecordData::Aao { nt, nord, nelm, .. }
+            | RecordData::SubArray { nt, nord, nelm, .. } => (nt, nord, *nelm),
+            _ => return false,
+        };
+
+        let mut next = value;
+        truncate_scalar_array_to_nelm(&mut next, nelm);
+        if nt.value == next {
+            return false;
+        }
+
+        *nord = next.len();
+        nt.value = next;
+        true
+    }
+
+    pub fn set_nt_payload(&mut self, payload: NtPayload) -> bool {
+        match (&mut self.data, payload) {
+            (
+                RecordData::Ai { nt, .. }
+                | RecordData::Ao { nt, .. }
+                | RecordData::Bi { nt, .. }
+                | RecordData::Bo { nt, .. }
+                | RecordData::StringIn { nt, .. }
+                | RecordData::StringOut { nt, .. },
+                NtPayload::Scalar(next),
+            ) => {
+                if *nt == next {
+                    false
+                } else {
+                    *nt = next;
+                    true
+                }
+            }
+            (
+                RecordData::Waveform { nt, nord, nelm, .. }
+                | RecordData::Aai { nt, nord, nelm, .. }
+                | RecordData::Aao { nt, nord, nelm, .. }
+                | RecordData::SubArray { nt, nord, nelm, .. },
+                NtPayload::ScalarArray(mut next),
+            ) => {
+                truncate_scalar_array_to_nelm(&mut next.value, *nelm);
+                let next_len = next.value.len();
+                if *nt == next {
+                    false
+                } else {
+                    *nord = next_len;
+                    *nt = next;
+                    true
+                }
+            }
+            (RecordData::NtTable { nt, .. }, NtPayload::Table(next)) => {
+                if next.validate().is_err() || *nt == next {
+                    false
+                } else {
+                    *nt = next;
+                    true
+                }
+            }
+            (RecordData::NtNdArray { nt, .. }, NtPayload::NdArray(next)) => {
+                if next.validate().is_err() || *nt == next {
+                    false
+                } else {
+                    *nt = next;
+                    true
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
+fn truncate_scalar_array_to_nelm(value: &mut ScalarArrayValue, nelm: usize) {
+    match value {
+        ScalarArrayValue::Bool(v) => v.truncate(nelm),
+        ScalarArrayValue::I8(v) => v.truncate(nelm),
+        ScalarArrayValue::I16(v) => v.truncate(nelm),
+        ScalarArrayValue::I32(v) => v.truncate(nelm),
+        ScalarArrayValue::I64(v) => v.truncate(nelm),
+        ScalarArrayValue::U8(v) => v.truncate(nelm),
+        ScalarArrayValue::U16(v) => v.truncate(nelm),
+        ScalarArrayValue::U32(v) => v.truncate(nelm),
+        ScalarArrayValue::U64(v) => v.truncate(nelm),
+        ScalarArrayValue::F32(v) => v.truncate(nelm),
+        ScalarArrayValue::F64(v) => v.truncate(nelm),
+        ScalarArrayValue::Str(v) => v.truncate(nelm),
+    }
 }
 
 fn parse_bool_like(input: &str) -> Option<bool> {

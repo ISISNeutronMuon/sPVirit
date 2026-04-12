@@ -107,9 +107,35 @@ impl SimplePvStore {
         pvs.get(name).map(|e| e.record.current_value())
     }
 
+    /// Read the full [`NtPayload`] of a PV.
+    pub async fn get_nt(&self, name: &str) -> Option<NtPayload> {
+        let pvs = self.pvs.read().await;
+        pvs.get(name).map(|e| e.record.to_ntpayload())
+    }
+
     /// Write a [`ScalarValue`] to a PV (bypasses on_put).
     pub async fn set_value(&self, name: &str, value: ScalarValue) -> bool {
         if self.set_value_inner(name, value).await {
+            self.evaluate_links(name).await;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Write a [`ScalarArrayValue`] to an array PV (bypasses on_put).
+    pub async fn set_array_value(&self, name: &str, value: ScalarArrayValue) -> bool {
+        if self.set_array_value_inner(name, value).await {
+            self.evaluate_links(name).await;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Write a full [`NtPayload`] to a PV (bypasses on_put).
+    pub async fn put_nt(&self, name: &str, payload: NtPayload) -> bool {
+        if self.put_nt_inner(name, payload).await {
             self.evaluate_links(name).await;
             true
         } else {
@@ -124,6 +150,68 @@ impl SimplePvStore {
             let mut pvs = self.pvs.write().await;
             if let Some(entry) = pvs.get_mut(name) {
                 let changed = entry.record.set_scalar_value(value, self.compute_alarms);
+                if changed {
+                    let payload = entry.record.to_ntpayload();
+                    entry.subscribers.retain(|tx| tx.try_send(payload.clone()).is_ok());
+                    Some(payload)
+                } else {
+                    None
+                }
+            } else {
+                return false;
+            }
+        };
+
+        if let Some(payload) = payload {
+            // Notify PVAccess monitor clients (if the registry is attached).
+            let reg = self.registry.read().await;
+            if let Some(registry) = reg.as_ref() {
+                registry.notify_monitors(name, &payload).await;
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Core array write logic — updates the value, notifies subscribers and monitors,
+    /// but does **not** trigger link evaluation (to avoid recursion).
+    async fn set_array_value_inner(&self, name: &str, value: ScalarArrayValue) -> bool {
+        let payload = {
+            let mut pvs = self.pvs.write().await;
+            if let Some(entry) = pvs.get_mut(name) {
+                let changed = entry.record.set_array_value(value);
+                if changed {
+                    let payload = entry.record.to_ntpayload();
+                    entry.subscribers.retain(|tx| tx.try_send(payload.clone()).is_ok());
+                    Some(payload)
+                } else {
+                    None
+                }
+            } else {
+                return false;
+            }
+        };
+
+        if let Some(payload) = payload {
+            // Notify PVAccess monitor clients (if the registry is attached).
+            let reg = self.registry.read().await;
+            if let Some(registry) = reg.as_ref() {
+                registry.notify_monitors(name, &payload).await;
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Core NtPayload write logic — updates the payload, notifies subscribers
+    /// and monitors, but does **not** trigger link evaluation.
+    async fn put_nt_inner(&self, name: &str, payload: NtPayload) -> bool {
+        let payload = {
+            let mut pvs = self.pvs.write().await;
+            if let Some(entry) = pvs.get_mut(name) {
+                let changed = entry.record.set_nt_payload(payload);
                 if changed {
                     let payload = entry.record.to_ntpayload();
                     entry.subscribers.retain(|tx| tx.try_send(payload.clone()).is_ok());
@@ -504,7 +592,10 @@ fn value_alarm_desc() -> StructureDesc {
 mod tests {
     use super::*;
     use crate::types::{DbCommonState, RecordType};
-    use spvirit_types::NtScalar;
+    use spvirit_types::{
+        NdCodec, NdDimension, NtNdArray, NtPayload, NtScalar, NtScalarArray, NtTable,
+        NtTableColumn, ScalarArrayValue, ScalarValue,
+    };
 
     fn make_ai(name: &str, val: f64) -> RecordInstance {
         RecordInstance {
@@ -538,6 +629,90 @@ mod tests {
                 siml: None,
                 siol: None,
                 simm: false,
+            },
+            raw_fields: HashMap::new(),
+        }
+    }
+
+    fn make_waveform(name: &str, value: ScalarArrayValue) -> RecordInstance {
+        let nelm = value.len();
+        RecordInstance {
+            name: name.to_string(),
+            record_type: RecordType::Waveform,
+            common: DbCommonState::default(),
+            data: RecordData::Waveform {
+                nt: NtScalarArray::from_value(value),
+                inp: None,
+                ftvl: "DOUBLE".to_string(),
+                nelm,
+                nord: nelm,
+            },
+            raw_fields: HashMap::new(),
+        }
+    }
+
+    fn make_nt_table(name: &str) -> RecordInstance {
+        RecordInstance {
+            name: name.to_string(),
+            record_type: RecordType::NtTable,
+            common: DbCommonState::default(),
+            data: RecordData::NtTable {
+                nt: NtTable {
+                    labels: vec!["X".to_string(), "Y".to_string()],
+                    columns: vec![
+                        NtTableColumn {
+                            name: "x".to_string(),
+                            values: ScalarArrayValue::F64(vec![1.0, 2.0]),
+                        },
+                        NtTableColumn {
+                            name: "y".to_string(),
+                            values: ScalarArrayValue::F64(vec![10.0, 20.0]),
+                        },
+                    ],
+                    descriptor: Some("table".to_string()),
+                    alarm: None,
+                    time_stamp: None,
+                },
+                inp: None,
+                out: None,
+                omsl: crate::types::OutputMode::Supervisory,
+            },
+            raw_fields: HashMap::new(),
+        }
+    }
+
+    fn make_nt_ndarray(name: &str) -> RecordInstance {
+        RecordInstance {
+            name: name.to_string(),
+            record_type: RecordType::NtNdArray,
+            common: DbCommonState::default(),
+            data: RecordData::NtNdArray {
+                nt: NtNdArray {
+                    value: ScalarArrayValue::U8(vec![0; 4]),
+                    codec: NdCodec {
+                        name: "none".to_string(),
+                        parameters: HashMap::new(),
+                    },
+                    compressed_size: 4,
+                    uncompressed_size: 4,
+                    dimension: vec![NdDimension {
+                        size: 2,
+                        offset: 0,
+                        full_size: 2,
+                        binning: 1,
+                        reverse: false,
+                    }],
+                    unique_id: 1,
+                    data_time_stamp: Default::default(),
+                    attribute: vec![],
+                    descriptor: Some("ndarray".to_string()),
+                    alarm: None,
+                    time_stamp: None,
+                    display: None,
+                },
+                inp: None,
+                out: None,
+                omsl: crate::types::OutputMode::Supervisory,
             },
             raw_fields: HashMap::new(),
         }
@@ -603,6 +778,159 @@ mod tests {
         assert!(store.set_value("TEST:AI", ScalarValue::F64(10.0)).await);
         let val = store.get_value("TEST:AI").await.unwrap();
         assert_eq!(val, ScalarValue::F64(10.0));
+    }
+
+    #[tokio::test]
+    async fn set_array_value_updates_all_scalar_array_types() {
+        let cases: Vec<ScalarArrayValue> = vec![
+            ScalarArrayValue::Bool(vec![false, true]),
+            ScalarArrayValue::I8(vec![1, 2]),
+            ScalarArrayValue::I16(vec![1, 2]),
+            ScalarArrayValue::I32(vec![1, 2]),
+            ScalarArrayValue::I64(vec![1, 2]),
+            ScalarArrayValue::U8(vec![1, 2]),
+            ScalarArrayValue::U16(vec![1, 2]),
+            ScalarArrayValue::U32(vec![1, 2]),
+            ScalarArrayValue::U64(vec![1, 2]),
+            ScalarArrayValue::F32(vec![1.0, 2.0]),
+            ScalarArrayValue::F64(vec![1.0, 2.0]),
+            ScalarArrayValue::Str(vec!["a".to_string(), "b".to_string()]),
+        ];
+
+        for (idx, updated) in cases.into_iter().enumerate() {
+            let pv = format!("TEST:WF:{idx}");
+            let mut records = HashMap::new();
+            records.insert(pv.clone(), make_waveform(&pv, updated.clone()));
+            let store = SimplePvStore::new(records, HashMap::new(), vec![], false);
+
+            assert!(!store.set_array_value(&pv, updated.clone()).await);
+
+            let second = match updated {
+                ScalarArrayValue::Bool(_) => ScalarArrayValue::Bool(vec![true, false]),
+                ScalarArrayValue::I8(_) => ScalarArrayValue::I8(vec![3, 4]),
+                ScalarArrayValue::I16(_) => ScalarArrayValue::I16(vec![3, 4]),
+                ScalarArrayValue::I32(_) => ScalarArrayValue::I32(vec![3, 4]),
+                ScalarArrayValue::I64(_) => ScalarArrayValue::I64(vec![3, 4]),
+                ScalarArrayValue::U8(_) => ScalarArrayValue::U8(vec![3, 4]),
+                ScalarArrayValue::U16(_) => ScalarArrayValue::U16(vec![3, 4]),
+                ScalarArrayValue::U32(_) => ScalarArrayValue::U32(vec![3, 4]),
+                ScalarArrayValue::U64(_) => ScalarArrayValue::U64(vec![3, 4]),
+                ScalarArrayValue::F32(_) => ScalarArrayValue::F32(vec![3.0, 4.0]),
+                ScalarArrayValue::F64(_) => ScalarArrayValue::F64(vec![3.0, 4.0]),
+                ScalarArrayValue::Str(_) => {
+                    ScalarArrayValue::Str(vec!["x".to_string(), "y".to_string()])
+                }
+            };
+
+            assert!(store.set_array_value(&pv, second.clone()).await);
+            let snap = store.get_snapshot(&pv).await.unwrap();
+            match snap {
+                NtPayload::ScalarArray(nt) => assert_eq!(nt.value, second),
+                _ => panic!("expected scalar array"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn get_nt_returns_full_payload() {
+        let mut records = HashMap::new();
+        records.insert("TEST:AI".into(), make_ai("TEST:AI", 12.5));
+        let store = SimplePvStore::new(records, HashMap::new(), vec![], false);
+
+        let nt = store.get_nt("TEST:AI").await.unwrap();
+        match nt {
+            NtPayload::Scalar(nt) => assert_eq!(nt.value, ScalarValue::F64(12.5)),
+            _ => panic!("expected scalar payload"),
+        }
+    }
+
+    #[tokio::test]
+    async fn put_nt_updates_scalar_array_table_and_ndarray() {
+        let mut records = HashMap::new();
+        records.insert("TEST:AI".into(), make_ai("TEST:AI", 1.0));
+        records.insert(
+            "TEST:WF".into(),
+            make_waveform("TEST:WF", ScalarArrayValue::F64(vec![0.0, 0.0])),
+        );
+        records.insert("TEST:TBL".into(), make_nt_table("TEST:TBL"));
+        records.insert("TEST:NDA".into(), make_nt_ndarray("TEST:NDA"));
+        let store = SimplePvStore::new(records, HashMap::new(), vec![], false);
+
+        assert!(store
+            .put_nt(
+                "TEST:AI",
+                NtPayload::Scalar(NtScalar::from_value(ScalarValue::F64(5.0))),
+            )
+            .await);
+        assert!(store
+            .put_nt(
+                "TEST:WF",
+                NtPayload::ScalarArray(NtScalarArray::from_value(ScalarArrayValue::F64(
+                    vec![3.0, 4.0],
+                ))),
+            )
+            .await);
+
+        let table = NtTable {
+            labels: vec!["X".to_string(), "Y".to_string()],
+            columns: vec![
+                NtTableColumn {
+                    name: "x".to_string(),
+                    values: ScalarArrayValue::F64(vec![2.0, 3.0]),
+                },
+                NtTableColumn {
+                    name: "y".to_string(),
+                    values: ScalarArrayValue::F64(vec![20.0, 30.0]),
+                },
+            ],
+            descriptor: Some("updated table".to_string()),
+            alarm: None,
+            time_stamp: None,
+        };
+        assert!(store.put_nt("TEST:TBL", NtPayload::Table(table.clone())).await);
+
+        let ndarray = NtNdArray {
+            value: ScalarArrayValue::U8(vec![1, 2, 3, 4]),
+            codec: NdCodec {
+                name: "none".to_string(),
+                parameters: HashMap::new(),
+            },
+            compressed_size: 4,
+            uncompressed_size: 4,
+            dimension: vec![NdDimension {
+                size: 4,
+                offset: 0,
+                full_size: 4,
+                binning: 1,
+                reverse: false,
+            }],
+            unique_id: 2,
+            data_time_stamp: Default::default(),
+            attribute: vec![],
+            descriptor: Some("updated ndarray".to_string()),
+            alarm: None,
+            time_stamp: None,
+            display: None,
+        };
+        assert!(store
+            .put_nt("TEST:NDA", NtPayload::NdArray(ndarray.clone()))
+            .await);
+
+        assert!(!store
+            .put_nt(
+                "TEST:AI",
+                NtPayload::ScalarArray(NtScalarArray::from_value(ScalarArrayValue::F64(vec![1.0]))),
+            )
+            .await);
+
+        match store.get_nt("TEST:TBL").await.unwrap() {
+            NtPayload::Table(nt) => assert_eq!(nt, table),
+            _ => panic!("expected table payload"),
+        }
+        match store.get_nt("TEST:NDA").await.unwrap() {
+            NtPayload::NdArray(nt) => assert_eq!(nt, ndarray),
+            _ => panic!("expected ndarray payload"),
+        }
     }
 
     #[tokio::test]
