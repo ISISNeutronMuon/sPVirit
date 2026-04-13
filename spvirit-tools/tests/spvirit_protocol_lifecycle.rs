@@ -3,11 +3,11 @@ mod protocol;
 use std::collections::HashSet;
 use std::time::Duration;
 
-use spvirit_codec::epics_decode::PvaPacketCommand;
-use spvirit_codec::spvirit_encode::encode_header;
-use spvirit_codec::spvd_decode::{extract_nt_scalar_value, DecodedValue};
 use protocol::frame_harness::TestServer;
 use protocol::scenario_harness::ScenarioSession;
+use spvirit_codec::epics_decode::PvaPacketCommand;
+use spvirit_codec::spvd_decode::{DecodedValue, extract_nt_scalar_value};
+use spvirit_codec::spvirit_encode::encode_header;
 use tokio::net::UdpSocket;
 
 const PV_REQUEST_EMPTY: [u8; 6] = [0xfd, 0x02, 0x00, 0x80, 0x00, 0x00];
@@ -305,7 +305,11 @@ async fn lifecycle_rpc_list_mode_gated_behavior() {
     match init_cmd {
         PvaPacketCommand::Op(op) => {
             if let Some(status) = op.status {
-                assert_eq!(status.code, 0xFF, "unexpected rpc init status: {:?}", status);
+                assert_eq!(
+                    status.code, 0xFF,
+                    "unexpected rpc init status: {:?}",
+                    status
+                );
             }
         }
         other => panic!("unexpected rpc init response: {:?}", other),

@@ -927,10 +927,12 @@ impl PvdDecoder {
                 }
             }
         }
-        if !has_field_bits && !bitset.is_empty() && (bitset[0] & 0x01) != 0 {
-            if let Some((value, consumed)) = self.decode_structure(data, desc) {
-                return Some((value, consumed));
-            }
+        if !has_field_bits
+            && !bitset.is_empty()
+            && (bitset[0] & 0x01) != 0
+            && let Some((value, consumed)) = self.decode_structure(data, desc)
+        {
+            return Some((value, consumed));
         }
 
         let mut fields: Vec<(String, DecodedValue)> = Vec::new();
@@ -979,7 +981,11 @@ impl PvdDecoder {
 
                     debug!(
                         "Nested structure '{}': parent_present={}, child_start_bit={}, child_count={}, any_child_bits_set={}",
-                        field.name, field_present, child_start_bit, child_field_count, any_child_bits_set
+                        field.name,
+                        field_present,
+                        child_start_bit,
+                        child_field_count,
+                        any_child_bits_set
                     );
 
                     if field_present && !any_child_bits_set {
@@ -1207,15 +1213,15 @@ fn format_field_value_compact(name: &str, val: &DecodedValue) -> String {
                     let severity = fields.iter().find(|(n, _)| n == "severity");
                     let message = fields.iter().find(|(n, _)| n == "message");
                     let mut parts = Vec::new();
-                    if let Some((_, DecodedValue::Int32(s))) = severity {
-                        if *s != 0 {
-                            parts.push(format!("sev={}", s));
-                        }
+                    if let Some((_, DecodedValue::Int32(s))) = severity
+                        && *s != 0
+                    {
+                        parts.push(format!("sev={}", s));
                     }
-                    if let Some((_, DecodedValue::String(m))) = message {
-                        if !m.is_empty() {
-                            parts.push(format!("\"{}\"", m));
-                        }
+                    if let Some((_, DecodedValue::String(m))) = message
+                        && !m.is_empty()
+                    {
+                        parts.push(format!("\"{}\"", m));
                     }
                     if parts.is_empty() {
                         String::new() // Don't show alarm if it's OK
@@ -1277,7 +1283,7 @@ fn format_scalar_value(val: &DecodedValue) -> String {
             if arr.is_empty() {
                 "[]".to_string()
             } else if arr.len() <= 3 {
-                let items: Vec<String> = arr.iter().map(|v| format_scalar_value(v)).collect();
+                let items: Vec<String> = arr.iter().map(format_scalar_value).collect();
                 format!("[{}]", items.join(", "))
             } else {
                 format!("[{} items]", arr.len())

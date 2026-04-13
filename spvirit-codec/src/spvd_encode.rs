@@ -96,7 +96,11 @@ fn encode_scalar_value(value: &ScalarValue, is_be: bool) -> Vec<u8> {
         ScalarValue::Bool(v) => vec![if *v { 1 } else { 0 }],
         ScalarValue::I8(v) => vec![*v as u8],
         ScalarValue::I16(v) => {
-            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+            if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            }
         }
         ScalarValue::I32(v) => {
             if is_be {
@@ -106,20 +110,40 @@ fn encode_scalar_value(value: &ScalarValue, is_be: bool) -> Vec<u8> {
             }
         }
         ScalarValue::I64(v) => {
-            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+            if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            }
         }
         ScalarValue::U8(v) => vec![*v],
         ScalarValue::U16(v) => {
-            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+            if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            }
         }
         ScalarValue::U32(v) => {
-            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+            if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            }
         }
         ScalarValue::U64(v) => {
-            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+            if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            }
         }
         ScalarValue::F32(v) => {
-            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+            if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            }
         }
         ScalarValue::F64(v) => {
             if is_be {
@@ -428,7 +452,7 @@ pub fn encode_nt_scalar_full(nt: &NtScalar, is_be: bool) -> Vec<u8> {
 
 fn encode_structure_bitset(desc: &StructureDesc, is_be: bool) -> Vec<u8> {
     let total_bits = 1 + count_structure_fields(desc);
-    let bitset_size = (total_bits + 7) / 8;
+    let bitset_size = total_bits.div_ceil(8);
     let mut bitset = vec![0u8; bitset_size];
     for bit in 0..total_bits {
         let byte_idx = bit / 8;
@@ -995,7 +1019,11 @@ fn encode_attribute_variant(attr: &NtAttribute, is_be: bool) -> Vec<u8> {
         }
         ScalarValue::I16(v) => {
             let mut out = vec![TypeCode::Int16 as u8];
-            out.extend_from_slice(&if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() });
+            out.extend_from_slice(&if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            });
             out
         }
         ScalarValue::I32(v) => {
@@ -1015,22 +1043,38 @@ fn encode_attribute_variant(attr: &NtAttribute, is_be: bool) -> Vec<u8> {
         }
         ScalarValue::U16(v) => {
             let mut out = vec![TypeCode::UInt16 as u8];
-            out.extend_from_slice(&if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() });
+            out.extend_from_slice(&if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            });
             out
         }
         ScalarValue::U32(v) => {
             let mut out = vec![TypeCode::UInt32 as u8];
-            out.extend_from_slice(&if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() });
+            out.extend_from_slice(&if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            });
             out
         }
         ScalarValue::U64(v) => {
             let mut out = vec![TypeCode::UInt64 as u8];
-            out.extend_from_slice(&if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() });
+            out.extend_from_slice(&if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            });
             out
         }
         ScalarValue::F32(v) => {
             let mut out = vec![TypeCode::Float32 as u8];
-            out.extend_from_slice(&if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() });
+            out.extend_from_slice(&if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            });
             out
         }
         ScalarValue::F64(v) => {
@@ -1213,22 +1257,42 @@ pub fn encode_decoded_value(val: &DecodedValue, is_be: bool) -> Vec<u8> {
         DecodedValue::Boolean(v) => vec![if *v { 1 } else { 0 }],
         DecodedValue::Int8(v) => vec![*v as u8],
         DecodedValue::Int16(v) => {
-            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+            if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            }
         }
         DecodedValue::Int32(v) => encode_i32(*v, is_be),
         DecodedValue::Int64(v) => encode_i64(*v, is_be),
         DecodedValue::UInt8(v) => vec![*v],
         DecodedValue::UInt16(v) => {
-            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+            if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            }
         }
         DecodedValue::UInt32(v) => {
-            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+            if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            }
         }
         DecodedValue::UInt64(v) => {
-            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+            if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            }
         }
         DecodedValue::Float32(v) => {
-            if is_be { v.to_be_bytes().to_vec() } else { v.to_le_bytes().to_vec() }
+            if is_be {
+                v.to_be_bytes().to_vec()
+            } else {
+                v.to_le_bytes().to_vec()
+            }
         }
         DecodedValue::Float64(v) => encode_f64(*v, is_be),
         DecodedValue::String(v) => encode_string_pvd(v, is_be),
@@ -1323,7 +1387,9 @@ mod tests {
 
     #[test]
     fn nt_ndarray_roundtrip() {
-        use spvirit_types::{NdCodec, NdDimension, NtAlarm, NtNdArray, NtTimeStamp, ScalarArrayValue};
+        use spvirit_types::{
+            NdCodec, NdDimension, NtAlarm, NtNdArray, NtTimeStamp, ScalarArrayValue,
+        };
         use std::collections::HashMap;
 
         let nt = NtNdArray {
@@ -1365,13 +1431,19 @@ mod tests {
         pvd.extend_from_slice(&data_bytes);
 
         let decoder = PvdDecoder::new(false);
-        let parsed_desc = decoder.parse_introspection(&pvd).expect("desc parse failed");
+        let parsed_desc = decoder
+            .parse_introspection(&pvd)
+            .expect("desc parse failed");
         let data_start = 1 + desc_bytes.len();
         let (_decoded, consumed) = decoder
             .decode_structure(&pvd[data_start..], &parsed_desc)
             .expect("data decode failed");
         assert!(consumed > 0, "consumed should be > 0");
-        assert_eq!(consumed, data_bytes.len(), "consumed should match data_bytes.len()");
+        assert_eq!(
+            consumed,
+            data_bytes.len(),
+            "consumed should match data_bytes.len()"
+        );
     }
 
     #[test]
@@ -1438,7 +1510,11 @@ mod tests {
         let (decoded, consumed) = decoder
             .decode_structure(&pvd[data_start..], &parsed_desc)
             .expect("value decode");
-        assert_eq!(consumed, data_bytes.len(), "consumed must match encoded length");
+        assert_eq!(
+            consumed,
+            data_bytes.len(),
+            "consumed must match encoded length"
+        );
 
         // Verify the decoded values actually match what we encoded.
         let DecodedValue::Structure(fields) = decoded else {

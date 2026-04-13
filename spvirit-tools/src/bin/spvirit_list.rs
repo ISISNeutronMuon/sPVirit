@@ -3,12 +3,11 @@ use std::net::{IpAddr, SocketAddr};
 use argparse::{ArgumentParser, Store};
 use tokio::runtime::Runtime;
 
-use spvirit_tools::spvirit_client::cli::CommonClientArgs;
 use spvirit_client::pvlist::pvlist_with_fallback;
+use spvirit_tools::spvirit_client::cli::CommonClientArgs;
 use spvirit_tools::spvirit_client::search::{
-    build_search_targets, discover_servers, DiscoveredServer,
+    DiscoveredServer, build_search_targets, discover_servers,
 };
-
 
 fn format_guid(guid: [u8; 12]) -> String {
     let mut text = String::from("0x");
@@ -42,11 +41,10 @@ fn resolve_server_by_guid(raw: &str, servers: &[DiscoveredServer]) -> Option<Soc
     }
 
     let mut guid = [0u8; 12];
-    for idx in 0..12 {
+    for (idx, slot) in guid.iter_mut().enumerate() {
         let start = idx * 2;
         let part = &hex[start..start + 2];
-        let byte = u8::from_str_radix(part, 16).ok()?;
-        guid[idx] = byte;
+        *slot = u8::from_str_radix(part, 16).ok()?;
     }
 
     servers

@@ -37,7 +37,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             interval.tick().await;
             tick = tick.wrapping_add(1);
             store
-                .put_nt("BEAMLINE:GROUP", NtPayload::Structure(build_structure(tick)))
+                .put_nt(
+                    "BEAMLINE:GROUP",
+                    NtPayload::Structure(build_structure(tick)),
+                )
                 .await;
         }
     });
@@ -47,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn build_structure(tick: u64) -> NtStructure {
     let mut alarm = NtStructure::new("alarm_t");
-    let severity: i32 = if tick % 5 == 0 { 1 } else { 0 };
+    let severity: i32 = if tick.is_multiple_of(5) { 1 } else { 0 };
     alarm.push("severity", NtField::Scalar(ScalarValue::I32(severity)));
     alarm.push("status", NtField::Scalar(ScalarValue::I32(0)));
     alarm.push(

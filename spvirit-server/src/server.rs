@@ -9,8 +9,8 @@ use std::time::Duration;
 use regex::Regex;
 use tracing::{error, info};
 
-use crate::beacon::{run_beacon, BeaconConfig};
-use crate::handler::{rand_guid, run_tcp_server, run_udp_search, PvListMode, ServerState};
+use crate::beacon::{BeaconConfig, run_beacon};
+use crate::handler::{PvListMode, ServerState, rand_guid, run_tcp_server, run_udp_search};
 use crate::monitor::MonitorRegistry;
 use crate::pvstore::PvStore;
 
@@ -138,8 +138,14 @@ pub async fn run_pva_server_with_registry<S: PvStore>(
 
     let udp_state = state.clone();
     let udp_task = tokio::spawn(async move {
-        if let Err(e) =
-            run_udp_search(udp_state, udp_addr, config.tcp_port, guid, config.advertise_ip).await
+        if let Err(e) = run_udp_search(
+            udp_state,
+            udp_addr,
+            config.tcp_port,
+            guid,
+            config.advertise_ip,
+        )
+        .await
         {
             error!("UDP search server error: {}", e);
         }

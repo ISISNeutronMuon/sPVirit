@@ -7,36 +7,36 @@ use hex;
 use std::fmt;
 use tracing::debug;
 
+use crate::spvd_decode::{DecodedValue, PvdDecoder, StructureDesc, format_compact_value};
 use crate::spvirit_encode::format_pva_address;
-use crate::spvd_decode::{format_compact_value, DecodedValue, PvdDecoder, StructureDesc};
 
 /// Single source of truth for PVA application command codes.
 ///
 /// Index == command code.  Any code beyond the table returns `"Unknown"`.
 const PVA_COMMAND_NAMES: &[&str] = &[
-    "BEACON",               // 0
+    "BEACON",                // 0
     "CONNECTION_VALIDATION", // 1
-    "ECHO",                 // 2
-    "SEARCH",               // 3
-    "SEARCH_RESPONSE",      // 4
-    "AUTHNZ",               // 5
-    "ACL_CHANGE",           // 6
-    "CREATE_CHANNEL",       // 7
-    "DESTROY_CHANNEL",      // 8
+    "ECHO",                  // 2
+    "SEARCH",                // 3
+    "SEARCH_RESPONSE",       // 4
+    "AUTHNZ",                // 5
+    "ACL_CHANGE",            // 6
+    "CREATE_CHANNEL",        // 7
+    "DESTROY_CHANNEL",       // 8
     "CONNECTION_VALIDATED",  // 9
-    "GET",                  // 10
-    "PUT",                  // 11
-    "PUT_GET",              // 12
-    "MONITOR",              // 13
-    "ARRAY",                // 14
-    "DESTROY_REQUEST",      // 15
-    "PROCESS",              // 16
-    "GET_FIELD",            // 17
-    "MESSAGE",              // 18
-    "MULTIPLE_DATA",        // 19
-    "RPC",                  // 20
-    "CANCEL_REQUEST",       // 21
-    "ORIGIN_TAG",           // 22
+    "GET",                   // 10
+    "PUT",                   // 11
+    "PUT_GET",               // 12
+    "MONITOR",               // 13
+    "ARRAY",                 // 14
+    "DESTROY_REQUEST",       // 15
+    "PROCESS",               // 16
+    "GET_FIELD",             // 17
+    "MESSAGE",               // 18
+    "MULTIPLE_DATA",         // 19
+    "RPC",                   // 20
+    "CANCEL_REQUEST",        // 21
+    "ORIGIN_TAG",            // 22
 ];
 
 /// Look up a PVA command name by its numeric code.
@@ -60,6 +60,12 @@ pub fn command_to_integer(command: &str) -> u8 {
 /// Prefer calling [`command_name`] directly for new code.
 #[derive(Debug)]
 pub struct PvaCommands;
+
+impl Default for PvaCommands {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl PvaCommands {
     pub fn new() -> Self {
@@ -643,9 +649,8 @@ impl PvaGetFieldPayload {
             // 1) legacy: [cid][field_name]
             // 2) EPICS pvAccess: [sid][ioid][field_name]
             let legacy_field = if raw.len() > 4 {
-                decode_string(&raw[4..], is_be).and_then(|(s, consumed)| {
-                    (4 + consumed == raw.len()).then_some(s)
-                })
+                decode_string(&raw[4..], is_be)
+                    .and_then(|(s, consumed)| (4 + consumed == raw.len()).then_some(s))
             } else {
                 None
             };
@@ -656,9 +661,8 @@ impl PvaGetFieldPayload {
                 } else {
                     u32::from_le_bytes(raw[4..8].try_into().ok()?)
                 };
-                decode_string(&raw[8..], is_be).and_then(|(s, consumed)| {
-                    (8 + consumed == raw.len()).then_some((ioid, s))
-                })
+                decode_string(&raw[8..], is_be)
+                    .and_then(|(s, consumed)| (8 + consumed == raw.len()).then_some((ioid, s)))
             } else {
                 None
             };
@@ -1013,7 +1017,6 @@ impl PvaBeaconPayload {
             u16::from_le_bytes(raw[32..34].try_into().unwrap())
         };
         let (protocol, len) = decode_string(&raw[34..], is_be)?;
-        let protocol = protocol;
         let server_status_if = if len > 0 {
             let (server_status_if, _server_status_len) = decode_string(&raw[34 + len..], is_be)?;
             server_status_if
@@ -1273,16 +1276,14 @@ fn extract_pv_names(raw: &[u8]) -> Vec<String> {
                 }
             }
             let len = i - start;
-            if len >= 3 && len <= 128 {
-                if let Ok(s) = std::str::from_utf8(&raw[start..start + len]) {
-                    // validate candidate contains at least one alphabetic char
-                    if s.chars().any(|c| c.is_ascii_alphabetic()) {
-                        if !names.contains(&s.to_string()) {
-                            names.push(s.to_string());
-                            if names.len() >= 8 {
-                                break;
-                            }
-                        }
+            if (3..=128).contains(&len)
+                && let Ok(s) = std::str::from_utf8(&raw[start..start + len])
+            {
+                // validate candidate contains at least one alphabetic char
+                if s.chars().any(|c| c.is_ascii_alphabetic()) && !names.contains(&s.to_string()) {
+                    names.push(s.to_string());
+                    if names.len() >= 8 {
+                        break;
                     }
                 }
             }
@@ -1380,7 +1381,7 @@ impl PvaOpPayload {
             None
         };
 
-        let result = Some(Self {
+        Some(Self {
             sid_or_cid,
             ioid,
             subcmd,
@@ -1391,9 +1392,7 @@ impl PvaOpPayload {
             pv_names,
             introspection,
             decoded_value: None, // Will be set by packet processor with field_desc
-        });
-
-        result
+        })
     }
 
     /// Decode the body using provided field description
@@ -1488,20 +1487,20 @@ fn score_decoded(value: &DecodedValue) -> i32 {
             "timeStamp" => {
                 has_ts = true;
                 score += 2;
-                if let DecodedValue::Structure(ts_fields) = val {
-                    if let Some(secs) = ts_fields.iter().find_map(|(n, v)| {
-                        if n == "secondsPastEpoch" {
-                            if let DecodedValue::Int64(s) = v {
-                                return Some(*s);
-                            }
+                if let DecodedValue::Structure(ts_fields) = val
+                    && let Some(secs) = ts_fields.iter().find_map(|(n, v)| {
+                        if n == "secondsPastEpoch"
+                            && let DecodedValue::Int64(s) = v
+                        {
+                            return Some(*s);
                         }
                         None
-                    }) {
-                        if (0..=4_000_000_000i64).contains(&secs) {
-                            score += 2;
-                        } else if secs.abs() > 10_000_000_000i64 {
-                            score -= 2;
-                        }
+                    })
+                {
+                    if (0..=4_000_000_000i64).contains(&secs) {
+                        score += 2;
+                    } else if secs.abs() > 10_000_000_000i64 {
+                        score -= 2;
                     }
                 }
             }
@@ -1729,11 +1728,7 @@ impl fmt::Display for PvaDestroyRequestPayload {
 
 impl fmt::Display for PvaOriginTagPayload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "ORIGIN_TAG(addr={})",
-            format_pva_address(&self.address)
-        )
+        write!(f, "ORIGIN_TAG(addr={})", format_pva_address(&self.address))
     }
 }
 
@@ -1834,15 +1829,13 @@ impl fmt::Display for PvaOpPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spvirit_types::{
-        NtPayload, NtScalar, NtScalarArray, ScalarArrayValue, ScalarValue,
-    };
-    use crate::spvirit_encode::encode_header;
     use crate::spvd_decode::extract_nt_scalar_value;
     use crate::spvd_encode::{
         encode_nt_payload_bitset_parts, encode_nt_scalar_bitset_parts, encode_size_pvd,
         nt_payload_desc, nt_scalar_desc,
     };
+    use crate::spvirit_encode::encode_header;
+    use spvirit_types::{NtPayload, NtScalar, NtScalarArray, ScalarArrayValue, ScalarValue};
 
     #[test]
     fn test_decode_status_ok() {

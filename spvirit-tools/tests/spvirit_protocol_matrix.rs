@@ -1,6 +1,6 @@
 mod protocol;
 
-use protocol::coverage_matrix::{command_coverage, SupportLevel};
+use protocol::coverage_matrix::{SupportLevel, command_coverage};
 
 #[test]
 fn protocol_matrix_has_no_unclassified_entries() {

@@ -6,29 +6,28 @@
 ///            [--tcp-port PORT] [--udp-port PORT] [--debug]
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use argparse::{ArgumentParser, Store, StoreTrue};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, mpsc};
 use tracing::{debug, error, info};
 
 use spvirit_codec::epics_decode::{PvaHeader, PvaPacket, PvaPacketCommand};
+use spvirit_codec::spvd_encode::nt_payload_desc;
 use spvirit_codec::spvirit_encode::{
     encode_beacon, encode_connection_validated, encode_connection_validation,
     encode_control_message, encode_create_channel_error, encode_create_channel_response,
     encode_destroy_channel_response, encode_monitor_data_response_payload, encode_op_error,
-    encode_op_get_data_response_payload, encode_op_init_response_desc,
-    encode_op_put_response, encode_search_response,
-    ip_from_bytes, ip_to_bytes,
+    encode_op_get_data_response_payload, encode_op_init_response_desc, encode_op_put_response,
+    encode_search_response, ip_from_bytes, ip_to_bytes,
 };
-use spvirit_codec::spvd_encode::nt_payload_desc;
 use spvirit_types::{
-    NdCodec, NdDimension, NtAlarm, NtNdArray, NtPayload, NtScalar, NtTimeStamp,
-    ScalarArrayValue, ScalarValue,
+    NdCodec, NdDimension, NtAlarm, NtNdArray, NtPayload, NtScalar, NtTimeStamp, ScalarArrayValue,
+    ScalarValue,
 };
 
 // ---------------------------------------------------------------------------
@@ -125,6 +124,7 @@ fn project(v: [f64; 3], w: usize, h: usize) -> (f64, f64) {
 // ---------------------------------------------------------------------------
 
 /// Bresenham line drawing with anti‑aliased width.
+#[allow(clippy::too_many_arguments)]
 fn draw_line(buf: &mut [u8], w: usize, h: usize, x0: f64, y0: f64, x1: f64, y1: f64, val: u8) {
     let dx = (x1 - x0).abs();
     let dy = (y1 - y0).abs();
@@ -477,14 +477,12 @@ fn infer_response_ip(listen: IpAddr, peer: SocketAddr) -> IpAddr {
     } else {
         "[::]:0"
     };
-    if let Ok(sock) = std::net::UdpSocket::bind(bind_addr) {
-        if sock.connect(peer).is_ok() {
-            if let Ok(local) = sock.local_addr() {
-                if !local.ip().is_unspecified() {
-                    return local.ip();
-                }
-            }
-        }
+    if let Ok(sock) = std::net::UdpSocket::bind(bind_addr)
+        && sock.connect(peer).is_ok()
+        && let Ok(local) = sock.local_addr()
+        && !local.ip().is_unspecified()
+    {
+        return local.ip();
     }
     IpAddr::V4(Ipv4Addr::UNSPECIFIED)
 }
@@ -591,10 +589,12 @@ async fn handle_connection(
                         conn_state.sid_to_pv.insert(sid, pv_name.clone());
                         let resp = encode_create_channel_response(cid, sid, version, is_be);
                         state.send_msg(conn_id, resp).await;
-                        info!("Conn {}: channel '{}' cid={} sid={}", conn_id, pv_name, cid, sid);
+                        info!(
+                            "Conn {}: channel '{}' cid={} sid={}",
+                            conn_id, pv_name, cid, sid
+                        );
                     } else {
-                        let resp =
-                            encode_create_channel_error(cid, "PV not found", version, is_be);
+                        let resp = encode_create_channel_error(cid, "PV not found", version, is_be);
                         state.send_msg(conn_id, resp).await;
                     }
                 }
@@ -611,7 +611,14 @@ async fn handle_connection(
                     state
                         .send_msg(
                             conn_id,
-                            encode_op_error(op.command, op.subcmd, ioid, "Unknown SID", version, is_be),
+                            encode_op_error(
+                                op.command,
+                                op.subcmd,
+                                ioid,
+                                "Unknown SID",
+                                version,
+                                is_be,
+                            ),
                         )
                         .await;
                     continue;
@@ -631,29 +638,37 @@ async fn handle_connection(
                             conn_state.ioid_to_desc.insert(ioid, desc.clone());
                             conn_state.ioid_to_pv.insert(ioid, pv_name.clone());
                             let resp = encode_op_init_response_desc(
-                                op.command,
-                                ioid,
-                                0x08,
-                                &desc,
-                                version,
-                                is_be,
+                                op.command, ioid, 0x08, &desc, version, is_be,
                             );
                             debug!("GET INIT resp len={}", resp.len());
                             state.send_msg(conn_id, resp).await;
                         } else {
                             let resp =
                                 encode_op_get_data_response_payload(ioid, &nt, version, is_be);
-                            debug!("GET DATA resp len={} first_40={:02x?}", resp.len(), &resp[..std::cmp::min(40, resp.len())]);
+                            debug!(
+                                "GET DATA resp len={} first_40={:02x?}",
+                                resp.len(),
+                                &resp[..std::cmp::min(40, resp.len())]
+                            );
                             state.send_msg(conn_id, resp).await;
                         }
                     }
                     11 => {
                         // PUT (scalar speed PVs only)
                         if !state.is_speed_pv(&pv_name) {
-                            state.send_msg(
-                                conn_id,
-                                encode_op_error(op.command, op.subcmd, ioid, "PUT not supported on this PV", version, is_be),
-                            ).await;
+                            state
+                                .send_msg(
+                                    conn_id,
+                                    encode_op_error(
+                                        op.command,
+                                        op.subcmd,
+                                        ioid,
+                                        "PUT not supported on this PV",
+                                        version,
+                                        is_be,
+                                    ),
+                                )
+                                .await;
                             continue;
                         }
                         if is_init {
@@ -691,12 +706,7 @@ async fn handle_connection(
                             conn_state.ioid_to_desc.insert(ioid, desc.clone());
                             conn_state.ioid_to_pv.insert(ioid, pv_name.clone());
                             let resp = encode_op_init_response_desc(
-                                op.command,
-                                ioid,
-                                0x08,
-                                &desc,
-                                version,
-                                is_be,
+                                op.command, ioid, 0x08, &desc, version, is_be,
                             );
                             state.send_msg(conn_id, resp).await;
                             let mut monitors = state.monitors.lock().await;
@@ -709,7 +719,10 @@ async fn handle_connection(
                                 is_be,
                             });
                             conn_state.ioid_to_sid.insert(ioid, sid);
-                            info!("Conn {}: monitor init ioid={} sid={} pv={}", conn_id, ioid, sid, pv_name);
+                            info!(
+                                "Conn {}: monitor init ioid={} sid={} pv={}",
+                                conn_id, ioid, sid, pv_name
+                            );
                         } else if (op.subcmd & 0x10) != 0 {
                             // MONITOR stop/destroy
                             let nt = if state.is_speed_pv(&pv_name) {
@@ -760,9 +773,7 @@ async fn handle_connection(
                 // Remove all monitors for this connection + SID
                 {
                     let mut monitors = state.monitors.lock().await;
-                    monitors.retain(|m| {
-                        !(m.conn_id == conn_id && m.sid == dc.sid)
-                    });
+                    monitors.retain(|m| !(m.conn_id == conn_id && m.sid == dc.sid));
                 }
                 // Clean up IOID mappings for this SID
                 let ioids: Vec<u32> = conn_state
@@ -781,7 +792,10 @@ async fn handle_connection(
                 // Send destroy channel response
                 let resp = encode_destroy_channel_response(dc.sid, dc.cid, version, is_be);
                 state.send_msg(conn_id, resp).await;
-                info!("Conn {}: destroy channel cid={} sid={}", conn_id, dc.cid, dc.sid);
+                info!(
+                    "Conn {}: destroy channel cid={} sid={}",
+                    conn_id, dc.cid, dc.sid
+                );
             }
             _ => {}
         }
@@ -814,10 +828,7 @@ struct ConnState {
 // PUT decode helper — extract f64 value from a PUT body
 // ---------------------------------------------------------------------------
 
-fn decode_put_value(
-    body: &[u8],
-    is_be: bool,
-) -> Option<f64> {
+fn decode_put_value(body: &[u8], is_be: bool) -> Option<f64> {
     // Try several strategies to find the double value in the PUT body.
     // Strategy 1: bitset-prefixed decode (standard PVA PUT body format)
     //   Body layout: bitset_size(1) + bitset_bytes + encoded_values
@@ -893,7 +904,8 @@ async fn notify_speed_monitors(state: &Arc<ServerState>, pv_name: &str) {
             .collect::<Vec<_>>()
     };
     for sub in &subs {
-        let resp = encode_monitor_data_response_payload(sub.ioid, 0x00, &nt, sub.version, sub.is_be);
+        let resp =
+            encode_monitor_data_response_payload(sub.ioid, 0x00, &nt, sub.version, sub.is_be);
         state.send_msg(sub.conn_id, resp).await;
     }
 }
@@ -939,7 +951,11 @@ async fn run_image_updater(state: Arc<ServerState>, width: usize, height: usize,
         // Fan out to image monitors only (speed monitors are notified on PUT).
         let subs = {
             let monitors = state.monitors.lock().await;
-            monitors.iter().filter(|m| m.pv_name == state.pv_name).cloned().collect::<Vec<_>>()
+            monitors
+                .iter()
+                .filter(|m| m.pv_name == state.pv_name)
+                .cloned()
+                .collect::<Vec<_>>()
         };
         if subs.is_empty() {
             continue;
@@ -967,7 +983,11 @@ async fn run_image_updater(state: Arc<ServerState>, width: usize, height: usize,
                 copy
             } else {
                 let resp = encode_monitor_data_response_payload(
-                    sub.ioid, 0x00, &payload, sub.version, sub.is_be,
+                    sub.ioid,
+                    0x00,
+                    &payload,
+                    sub.version,
+                    sub.is_be,
                 );
                 encoded_cache.push((sub.version, sub.is_be, resp.clone()));
                 resp
@@ -1050,8 +1070,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         ap.refer(&mut pv_name)
             .add_option(&["--pv"], Store, "PV name (default: DODECA:IMAGE)");
-        ap.refer(&mut width)
-            .add_option(&["--width"], Store, "Image width in pixels (default: 256)");
+        ap.refer(&mut width).add_option(
+            &["--width"],
+            Store,
+            "Image width in pixels (default: 256)",
+        );
         ap.refer(&mut height).add_option(
             &["--height"],
             Store,
@@ -1062,10 +1085,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Store,
             "Frame update rate in Hz (default: 10)",
         );
-        ap.refer(&mut tcp_port)
-            .add_option(&["--tcp-port"], Store, "TCP server port (default: 5075)");
-        ap.refer(&mut udp_port)
-            .add_option(&["--udp-port"], Store, "UDP search port (default: 5076)");
+        ap.refer(&mut tcp_port).add_option(
+            &["--tcp-port"],
+            Store,
+            "TCP server port (default: 5075)",
+        );
+        ap.refer(&mut udp_port).add_option(
+            &["--udp-port"],
+            Store,
+            "UDP search port (default: 5076)",
+        );
         ap.refer(&mut conn_timeout_secs).add_option(
             &["--conn-timeout"],
             Store,

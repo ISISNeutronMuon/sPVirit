@@ -3,7 +3,7 @@ use std::f64::consts::PI;
 use argparse::{ArgumentParser, Store};
 use serde_json::Value;
 use tokio::runtime::Runtime;
-use tokio::time::{interval, Instant};
+use tokio::time::{Instant, interval};
 
 use spvirit_client::client_from_opts;
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
@@ -31,10 +31,10 @@ async fn pvsine(
     loop {
         tick.tick().await;
         let t = start.elapsed().as_secs_f64();
-        if let Some(dur) = duration {
-            if t >= dur {
-                break;
-            }
+        if let Some(dur) = duration
+            && t >= dur
+        {
+            break;
         }
         let value = offset + amp * (2.0 * PI * freq_hz * t + phase).sin();
         let input = Value::Number(serde_json::Number::from_f64(value).unwrap());

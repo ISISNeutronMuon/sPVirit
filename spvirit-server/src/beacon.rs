@@ -1,12 +1,12 @@
 //! PVA beacon sender.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 
-use tokio::net::UdpSocket;
 use spvirit_codec::spvirit_encode::{encode_beacon, ip_to_bytes};
+use tokio::net::UdpSocket;
 
 /// Configuration for the beacon sender.
 pub struct BeaconConfig {

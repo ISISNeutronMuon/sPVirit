@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use regex::Regex;
 
 use harness::{
-    contains_any, env_enabled, env_string, run_command, run_command_success,
-    run_command_success_with_timeout, tool_path_from_base, workspace_bin, ProcessGuard,
+    ProcessGuard, contains_any, env_enabled, env_string, run_command, run_command_success,
+    run_command_success_with_timeout, tool_path_from_base, workspace_bin,
 };
 
 #[derive(Clone)]
@@ -28,11 +28,21 @@ fn parse_external_pv_cases() -> Vec<PvCase> {
             let ro3 = env_string("PVA_EXT_RO_PV_3");
             let table = env_string("PVA_EXT_TABLE_PV");
             let mut values = Vec::new();
-            if let Some(v) = rw { values.push(v); }
-            if let Some(v) = ro1 { values.push(v); }
-            if let Some(v) = ro2 { values.push(v); }
-            if let Some(v) = ro3 { values.push(v); }
-            if let Some(v) = table { values.push(v); }
+            if let Some(v) = rw {
+                values.push(v);
+            }
+            if let Some(v) = ro1 {
+                values.push(v);
+            }
+            if let Some(v) = ro2 {
+                values.push(v);
+            }
+            if let Some(v) = ro3 {
+                values.push(v);
+            }
+            if let Some(v) = table {
+                values.push(v);
+            }
             if values.is_empty() {
                 None
             } else {
@@ -59,7 +69,10 @@ fn rust_tool_command(bin: &str, server: Option<&str>, pv: &str) -> Command {
     if let Some(addr) = server {
         command.arg("--server").arg(addr);
     }
-    command.arg(pv).stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .arg(pv)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     command
 }
 
@@ -140,8 +153,7 @@ fn run_rust_write_restore(server: Option<&str>, pv: &str) {
     let before_output = run_command_success(&mut read_before, "rust pvget before write")
         .unwrap_or_else(|error| panic!("pvget before write failed for {}: {}", pv, error));
     let before_text = String::from_utf8_lossy(&before_output.stdout);
-    let value_regex = Regex::new(r"(?i)value[^0-9+\-]*([+\-]?\d+(?:\.\d+)?)")
-        .expect("valid regex");
+    let value_regex = Regex::new(r"(?i)value[^0-9+\-]*([+\-]?\d+(?:\.\d+)?)").expect("valid regex");
     let original_value = value_regex
         .captures(&before_text)
         .and_then(|captures| captures.get(1))
@@ -199,7 +211,10 @@ fn run_epics_read_tools(pv: &str) {
         Duration::from_secs(interop_cmd_timeout_secs()),
     )
     .unwrap_or_else(|error| panic!("epics pvget failed for {}: {}", pv, error));
-    eprintln!("[interop] epics pvget completed in {:?}", started_at.elapsed());
+    eprintln!(
+        "[interop] epics pvget completed in {:?}",
+        started_at.elapsed()
+    );
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(
         contains_any(&text, &[pv, "value", "alarm"]),
@@ -218,7 +233,10 @@ fn run_epics_read_tools(pv: &str) {
         Duration::from_secs(interop_cmd_timeout_secs()),
     )
     .unwrap_or_else(|error| panic!("epics pvinfo failed for {}: {}", pv, error));
-    eprintln!("[interop] epics pvinfo completed in {:?}", started_at.elapsed());
+    eprintln!(
+        "[interop] epics pvinfo completed in {:?}",
+        started_at.elapsed()
+    );
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(
         contains_any(&text, &[pv, "value", "structure"]),
@@ -259,7 +277,10 @@ fn run_epics_pvlist(server_target: Option<&str>) {
             error
         )
     });
-    eprintln!("[interop] epics pvlist completed in {:?}", started_at.elapsed());
+    eprintln!(
+        "[interop] epics pvlist completed in {:?}",
+        started_at.elapsed()
+    );
 
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(

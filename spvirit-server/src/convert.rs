@@ -187,10 +187,26 @@ pub fn decode_nt_alarm(val: &DecodedValue) -> Option<spvirit_types::NtAlarm> {
     let DecodedValue::Structure(fields) = val else {
         return None;
     };
-    let severity = fields.iter().find(|(n, _)| n == "severity").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-    let status = fields.iter().find(|(n, _)| n == "status").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-    let message = fields.iter().find(|(n, _)| n == "message").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
-    Some(spvirit_types::NtAlarm { severity, status, message })
+    let severity = fields
+        .iter()
+        .find(|(n, _)| n == "severity")
+        .and_then(|(_, v)| decoded_to_i32(v))
+        .unwrap_or(0);
+    let status = fields
+        .iter()
+        .find(|(n, _)| n == "status")
+        .and_then(|(_, v)| decoded_to_i32(v))
+        .unwrap_or(0);
+    let message = fields
+        .iter()
+        .find(|(n, _)| n == "message")
+        .and_then(|(_, v)| decoded_to_string(v))
+        .unwrap_or_default();
+    Some(spvirit_types::NtAlarm {
+        severity,
+        status,
+        message,
+    })
 }
 
 /// Decode an `NtTimeStamp` from a decoded PVA timestamp structure.
@@ -198,10 +214,26 @@ pub fn decode_nt_timestamp(val: &DecodedValue) -> Option<spvirit_types::NtTimeSt
     let DecodedValue::Structure(fields) = val else {
         return None;
     };
-    let seconds = fields.iter().find(|(n, _)| n == "secondsPastEpoch").and_then(|(_, v)| decoded_to_i64(v)).unwrap_or(0);
-    let nanos = fields.iter().find(|(n, _)| n == "nanoseconds").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-    let user_tag = fields.iter().find(|(n, _)| n == "userTag").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-    Some(spvirit_types::NtTimeStamp { seconds_past_epoch: seconds, nanoseconds: nanos, user_tag })
+    let seconds = fields
+        .iter()
+        .find(|(n, _)| n == "secondsPastEpoch")
+        .and_then(|(_, v)| decoded_to_i64(v))
+        .unwrap_or(0);
+    let nanos = fields
+        .iter()
+        .find(|(n, _)| n == "nanoseconds")
+        .and_then(|(_, v)| decoded_to_i32(v))
+        .unwrap_or(0);
+    let user_tag = fields
+        .iter()
+        .find(|(n, _)| n == "userTag")
+        .and_then(|(_, v)| decoded_to_i32(v))
+        .unwrap_or(0);
+    Some(spvirit_types::NtTimeStamp {
+        seconds_past_epoch: seconds,
+        nanoseconds: nanos,
+        user_tag,
+    })
 }
 
 /// Decode an `NtDisplay` from a decoded PVA display structure.
@@ -209,10 +241,36 @@ pub fn decode_nt_display(val: &DecodedValue) -> Option<spvirit_types::NtDisplay>
     let DecodedValue::Structure(fields) = val else {
         return None;
     };
-    let limit_low = fields.iter().find(|(n, _)| n == "limitLow").and_then(|(_, v)| decoded_to_f64(v)).unwrap_or(0.0);
-    let limit_high = fields.iter().find(|(n, _)| n == "limitHigh").and_then(|(_, v)| decoded_to_f64(v)).unwrap_or(0.0);
-    let description = fields.iter().find(|(n, _)| n == "description").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
-    let units = fields.iter().find(|(n, _)| n == "units").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
-    let precision = fields.iter().find(|(n, _)| n == "precision").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-    Some(spvirit_types::NtDisplay { limit_low, limit_high, description, units, precision })
+    let limit_low = fields
+        .iter()
+        .find(|(n, _)| n == "limitLow")
+        .and_then(|(_, v)| decoded_to_f64(v))
+        .unwrap_or(0.0);
+    let limit_high = fields
+        .iter()
+        .find(|(n, _)| n == "limitHigh")
+        .and_then(|(_, v)| decoded_to_f64(v))
+        .unwrap_or(0.0);
+    let description = fields
+        .iter()
+        .find(|(n, _)| n == "description")
+        .and_then(|(_, v)| decoded_to_string(v))
+        .unwrap_or_default();
+    let units = fields
+        .iter()
+        .find(|(n, _)| n == "units")
+        .and_then(|(_, v)| decoded_to_string(v))
+        .unwrap_or_default();
+    let precision = fields
+        .iter()
+        .find(|(n, _)| n == "precision")
+        .and_then(|(_, v)| decoded_to_i32(v))
+        .unwrap_or(0);
+    Some(spvirit_types::NtDisplay {
+        limit_low,
+        limit_high,
+        description,
+        units,
+        precision,
+    })
 }

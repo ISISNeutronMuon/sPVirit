@@ -597,10 +597,10 @@ pub fn parse_db(content: &str) -> Result<HashMap<String, RecordInstance>, String
             }
             continue;
         }
-        if let Some(caps) = field_re.captures(line) {
-            if let Some(rec) = current.as_mut() {
-                rec.fields.insert(caps[1].to_string(), caps[2].to_string());
-            }
+        if let Some(caps) = field_re.captures(line)
+            && let Some(rec) = current.as_mut()
+        {
+            rec.fields.insert(caps[1].to_string(), caps[2].to_string());
         }
     }
     if let Some(rec) = current.take() {

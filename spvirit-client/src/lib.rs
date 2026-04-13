@@ -38,20 +38,22 @@
 pub mod auth;
 pub mod client;
 pub mod format;
-pub mod pva_client;
 pub mod put_encode;
+pub mod pva_client;
 pub mod pvlist;
 pub mod search;
 pub mod transport;
 pub mod types;
 
 // --- Re-exports: high-level API ---
-pub use pva_client::{PvaClient, PvaClientBuilder, PvaChannel, pvput, pvmonitor, pvinfo, client_from_opts};
+pub use pva_client::{
+    PvaChannel, PvaClient, PvaClientBuilder, client_from_opts, pvinfo, pvmonitor, pvput,
+};
 pub use pvlist::PvListSource;
 
 // --- Re-exports: client core ---
-pub use client::{build_client_validation, establish_channel, pvget, ChannelConn};
-pub use search::{build_auto_broadcast_targets, search_pv, resolve_pv_server, SearchTarget};
+pub use client::{ChannelConn, build_client_validation, establish_channel, pvget};
+pub use format::{OutputFormat, RenderOptions, format_output};
+pub use search::{SearchTarget, build_auto_broadcast_targets, resolve_pv_server, search_pv};
 pub use transport::read_packet;
 pub use types::{PvGetError, PvGetOptions, PvGetResult, PvMonitorEvent, PvOptions};
-pub use format::{format_output, OutputFormat, RenderOptions};

@@ -1,15 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use argparse::{ArgumentParser, Store, StoreTrue};
 use regex::Regex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::sync::{mpsc, Mutex, RwLock};
-use tracing::{debug, error, info, Level};
+use tokio::sync::{Mutex, RwLock, mpsc};
+use tracing::{Level, debug, error, info};
 
 use spvirit_tools::spvirit_server::db::load_db;
 use spvirit_tools::spvirit_server::state::{ConnState, MonitorState, MonitorSub};
@@ -19,6 +19,9 @@ use spvirit_tools::spvirit_server::types::{
 };
 
 use spvirit_codec::epics_decode::{PvaHeader, PvaPacket, PvaPacketCommand};
+use spvirit_codec::spvd_decode::{DecodedValue, PvdDecoder};
+use spvirit_codec::spvd_decode::{FieldDesc, FieldType, StructureDesc, TypeCode};
+use spvirit_codec::spvd_encode::{encode_size_pvd, nt_payload_desc};
 use spvirit_codec::spvirit_encode::encode_control_message;
 use spvirit_codec::spvirit_encode::{
     encode_beacon, encode_connection_validation, encode_create_channel_error,
@@ -29,12 +32,8 @@ use spvirit_codec::spvirit_encode::{
     encode_op_put_get_init_error_response, encode_op_put_get_init_response,
     encode_op_put_getput_response_payload, encode_op_put_response, encode_op_put_status_response,
     encode_op_rpc_data_response_payload, encode_op_status_error_response,
-    encode_op_status_response, encode_search_response,
-    ip_to_bytes, ip_from_bytes,
+    encode_op_status_response, encode_search_response, ip_from_bytes, ip_to_bytes,
 };
-use spvirit_codec::spvd_decode::{DecodedValue, PvdDecoder};
-use spvirit_codec::spvd_decode::{FieldDesc, FieldType, StructureDesc, TypeCode};
-use spvirit_codec::spvd_encode::{encode_size_pvd, nt_payload_desc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PvListMode {
@@ -303,13 +302,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reload_state = state.clone();
     let db_file_clone = db_file.clone();
     let reload_task = tokio::spawn(async move {
-        if let Err(e) = run_db_reload(
-            reload_state,
-            db_file_clone,
-            reload_interval,
-        )
-        .await
-        {
+        if let Err(e) = run_db_reload(reload_state, db_file_clone, reload_interval).await {
             error!("DB reload error: {}", e);
         }
     });
@@ -382,99 +375,96 @@ async fn run_udp_search(
         };
         let version = pkt.header.version;
         let is_be = pkt.header.flags.is_msb;
-        match cmd {
-            PvaPacketCommand::Search(payload) => {
-                debug!(
-                    "UDP search from {}: pv_count={} mask=0x{:02x}",
-                    peer,
-                    payload.pv_requests.len(),
-                    payload.mask
-                );
-                let accepts_tcp = payload.protocols.is_empty()
-                    || payload
-                        .protocols
-                        .iter()
-                        .any(|p| p.eq_ignore_ascii_case("tcp"));
-                if !accepts_tcp {
-                    debug!("UDP search: no compatible protocol (tcp not accepted)");
-                    continue;
-                }
-                let pv_store = state.pv_store.read().await;
-                let visible_names = collect_visible_pv_names_from_store(
-                    &pv_store,
-                    state.pvlist_mode,
-                    state.pvlist_allow_pattern.as_ref(),
-                    state.pvlist_max,
-                );
-                let mut cids = Vec::new();
-                for (cid, name) in &payload.pv_requests {
-                    if pv_store.contains_key(name)
-                        || is_virtual_event_pv(name)
-                        || (is_pvlist_virtual_pv(name) && state.pvlist_mode == PvListMode::List)
-                        || (is_server_rpc_pv(name) && state.pvlist_mode != PvListMode::Off)
-                    {
-                        cids.push(*cid);
-                        continue;
-                    }
-                    if state.pvlist_mode != PvListMode::Off
-                        && is_pattern_query(name)
-                        && visible_names.iter().any(|pv| wildcard_match(name, pv))
-                    {
-                        cids.push(*cid);
-                    }
-                }
-                let response_required = (payload.mask & 0x01) != 0;
-                let server_discovery_ping = payload.pv_requests.is_empty();
-                let found = server_discovery_ping || !cids.is_empty();
-                if !found && !response_required {
-                    debug!("UDP search: no matches and response not required");
-                    continue;
-                }
-                let resp_ip = if let Some(ip) = advertise_ip {
-                    ip
-                } else if !addr.ip().is_unspecified() {
-                    addr.ip()
-                } else if let Some(ip) = infer_udp_response_ip(peer) {
-                    debug!("UDP search: inferred response address {}", ip);
-                    ip
-                } else {
-                    IpAddr::V4(Ipv4Addr::UNSPECIFIED)
-                };
-                let addr_bytes = if resp_ip.is_unspecified() {
-                    debug!("UDP search: responding with zero address (unspecified listen)");
-                    [0u8; 16]
-                } else {
-                    ip_to_bytes(resp_ip)
-                };
-                let response = encode_search_response(
-                    guid,
-                    payload.seq,
-                    addr_bytes,
-                    tcp_port,
-                    "tcp",
-                    found,
-                    &cids,
-                    version,
-                    is_be,
-                );
-                let reply_target = search_reply_target(&payload.addr, payload.port, peer);
-                if let Err(e) = socket.send_to(&response, reply_target).await {
-                    debug!(
-                        "UDP search: failed sending {} matches to {}: {}",
-                        cids.len(),
-                        reply_target,
-                        e
-                    );
-                    continue;
-                }
-                debug!(
-                    "UDP search: responded found={} with {} matches to {}",
-                    found,
-                    cids.len(),
-                    reply_target
-                );
+        if let PvaPacketCommand::Search(payload) = cmd {
+            debug!(
+                "UDP search from {}: pv_count={} mask=0x{:02x}",
+                peer,
+                payload.pv_requests.len(),
+                payload.mask
+            );
+            let accepts_tcp = payload.protocols.is_empty()
+                || payload
+                    .protocols
+                    .iter()
+                    .any(|p| p.eq_ignore_ascii_case("tcp"));
+            if !accepts_tcp {
+                debug!("UDP search: no compatible protocol (tcp not accepted)");
+                continue;
             }
-            _ => {}
+            let pv_store = state.pv_store.read().await;
+            let visible_names = collect_visible_pv_names_from_store(
+                &pv_store,
+                state.pvlist_mode,
+                state.pvlist_allow_pattern.as_ref(),
+                state.pvlist_max,
+            );
+            let mut cids = Vec::new();
+            for (cid, name) in &payload.pv_requests {
+                if pv_store.contains_key(name)
+                    || is_virtual_event_pv(name)
+                    || (is_pvlist_virtual_pv(name) && state.pvlist_mode == PvListMode::List)
+                    || (is_server_rpc_pv(name) && state.pvlist_mode != PvListMode::Off)
+                {
+                    cids.push(*cid);
+                    continue;
+                }
+                if state.pvlist_mode != PvListMode::Off
+                    && is_pattern_query(name)
+                    && visible_names.iter().any(|pv| wildcard_match(name, pv))
+                {
+                    cids.push(*cid);
+                }
+            }
+            let response_required = (payload.mask & 0x01) != 0;
+            let server_discovery_ping = payload.pv_requests.is_empty();
+            let found = server_discovery_ping || !cids.is_empty();
+            if !found && !response_required {
+                debug!("UDP search: no matches and response not required");
+                continue;
+            }
+            let resp_ip = if let Some(ip) = advertise_ip {
+                ip
+            } else if !addr.ip().is_unspecified() {
+                addr.ip()
+            } else if let Some(ip) = infer_udp_response_ip(peer) {
+                debug!("UDP search: inferred response address {}", ip);
+                ip
+            } else {
+                IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+            };
+            let addr_bytes = if resp_ip.is_unspecified() {
+                debug!("UDP search: responding with zero address (unspecified listen)");
+                [0u8; 16]
+            } else {
+                ip_to_bytes(resp_ip)
+            };
+            let response = encode_search_response(
+                guid,
+                payload.seq,
+                addr_bytes,
+                tcp_port,
+                "tcp",
+                found,
+                &cids,
+                version,
+                is_be,
+            );
+            let reply_target = search_reply_target(&payload.addr, payload.port, peer);
+            if let Err(e) = socket.send_to(&response, reply_target).await {
+                debug!(
+                    "UDP search: failed sending {} matches to {}: {}",
+                    cids.len(),
+                    reply_target,
+                    e
+                );
+                continue;
+            }
+            debug!(
+                "UDP search: responded found={} with {} matches to {}",
+                found,
+                cids.len(),
+                reply_target
+            );
         }
     }
 }
@@ -687,7 +677,9 @@ async fn handle_connection(
                     conn_id, version, is_be, val.buffer_size, val.qos, val.authz
                 );
                 // Empirically required by pvAccess clients: send CONNECTION_VALIDATED (cmd=9) status OK.
-                let resp = spvirit_codec::spvirit_encode::encode_connection_validated(true, version, is_be);
+                let resp = spvirit_codec::spvirit_encode::encode_connection_validated(
+                    true, version, is_be,
+                );
                 validate_encoded_packet(conn_id, "conn_validated_resp", &resp);
                 dump_hex_packet(
                     conn_id,
@@ -770,7 +762,14 @@ async fn handle_connection(
                     send_msg(
                         &state,
                         conn_id,
-                        encode_op_error(payload.command, payload.subcmd, ioid, "Unknown SID", version, is_be),
+                        encode_op_error(
+                            payload.command,
+                            payload.subcmd,
+                            ioid,
+                            "Unknown SID",
+                            version,
+                            is_be,
+                        ),
                     )
                     .await;
                     continue;
@@ -1214,11 +1213,8 @@ async fn handle_connection(
                                 pipeline_ack,
                                 nfree
                             );
-                            if start {
-                                if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
-                                    send_monitor_update_for(&state, &pv_name, conn_id, ioid, &nt)
-                                        .await;
-                                }
+                            if start && let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
+                                send_monitor_update_for(&state, &pv_name, conn_id, ioid, &nt).await;
                             }
                         }
                     }
@@ -1315,7 +1311,8 @@ async fn handle_connection(
             }
             PvaPacketCommand::Echo(payload_bytes) => {
                 // ECHO keepalive: echo back the same payload
-                let mut resp = encode_header(true, is_be, false, version, 2, payload_bytes.len() as u32);
+                let mut resp =
+                    encode_header(true, is_be, false, version, 2, payload_bytes.len() as u32);
                 resp.extend_from_slice(&payload_bytes);
                 send_msg(&state, conn_id, resp).await;
             }
@@ -1534,30 +1531,29 @@ async fn send_monitor_update_for(
     let mut to_send: Option<(u64, Vec<u8>)> = None;
     {
         let mut monitors = state.monitors.lock().await;
-        if let Some(list) = monitors.get_mut(pv_name) {
-            if let Some(sub) = list
+        if let Some(list) = monitors.get_mut(pv_name)
+            && let Some(sub) = list
                 .iter_mut()
                 .find(|s| s.conn_id == conn_id && s.ioid == ioid)
-            {
-                if !sub.running {
-                    return;
-                }
-                if sub.pipeline_enabled && sub.nfree == 0 {
-                    return;
-                }
-                let subcmd = 0x00;
-                if sub.pipeline_enabled && sub.nfree > 0 {
-                    sub.nfree -= 1;
-                }
-                let msg = encode_monitor_data_response_payload(
-                    sub.ioid,
-                    subcmd,
-                    payload,
-                    sub.version,
-                    sub.is_be,
-                );
-                to_send = Some((sub.conn_id, msg));
+        {
+            if !sub.running {
+                return;
             }
+            if sub.pipeline_enabled && sub.nfree == 0 {
+                return;
+            }
+            let subcmd = 0x00;
+            if sub.pipeline_enabled && sub.nfree > 0 {
+                sub.nfree -= 1;
+            }
+            let msg = encode_monitor_data_response_payload(
+                sub.ioid,
+                subcmd,
+                payload,
+                sub.version,
+                sub.is_be,
+            );
+            to_send = Some((sub.conn_id, msg));
         }
     }
 
@@ -1576,22 +1572,21 @@ async fn update_monitor_subscription(
     pipeline_enabled: Option<bool>,
 ) -> bool {
     let mut monitors = state.monitors.lock().await;
-    if let Some(list) = monitors.get_mut(pv_name) {
-        if let Some(sub) = list
+    if let Some(list) = monitors.get_mut(pv_name)
+        && let Some(sub) = list
             .iter_mut()
             .find(|s| s.conn_id == conn_id && s.ioid == ioid)
-        {
-            sub.running = running;
-            if let Some(v) = nfree {
-                sub.nfree = v;
-            }
-            if let Some(enabled) = pipeline_enabled {
-                if enabled {
-                    sub.pipeline_enabled = true;
-                }
-            }
-            return true;
+    {
+        sub.running = running;
+        if let Some(v) = nfree {
+            sub.nfree = v;
         }
+        if let Some(enabled) = pipeline_enabled
+            && enabled
+        {
+            sub.pipeline_enabled = true;
+        }
+        return true;
     }
     false
 }
@@ -1721,7 +1716,12 @@ async fn handle_get_field_request(
     is_be: bool,
 ) {
     if payload.is_server {
-        let resp = encode_get_field_error(payload.cid, "Unexpected server GET_FIELD payload", version, is_be);
+        let resp = encode_get_field_error(
+            payload.cid,
+            "Unexpected server GET_FIELD payload",
+            version,
+            is_be,
+        );
         send_msg(state, conn_id, resp).await;
         return;
     }
@@ -1731,53 +1731,55 @@ async fn handle_get_field_request(
     let sid = payload
         .sid
         .or_else(|| conn_state.cid_to_sid.get(&payload.cid).copied())
-        .or_else(|| conn_state.sid_to_pv.contains_key(&payload.cid).then_some(payload.cid))
+        .or_else(|| {
+            conn_state
+                .sid_to_pv
+                .contains_key(&payload.cid)
+                .then_some(payload.cid)
+        })
         .or_else(|| {
             (payload.cid == 0 && conn_state.sid_to_pv.len() == 1)
                 .then(|| conn_state.sid_to_pv.keys().copied().next())
                 .flatten()
         });
 
-    if let Some(sid) = sid {
-        if let Some(pv_name) = conn_state.sid_to_pv.get(&sid) {
-            if let Some(nt) = get_nt_snapshot(state, pv_name).await {
-                let full_desc = nt_payload_desc(&nt);
-                // If a sub-field name was requested, filter the introspection
-                let sub = payload
-                    .field_name
-                    .as_deref()
-                    .filter(|s| !s.is_empty());
-                let desc = if let Some(field_path) = sub {
-                    use spvirit_codec::spvd_decode::extract_subfield_desc;
-                    match extract_subfield_desc(&full_desc, field_path) {
-                        Some(sub_desc) => sub_desc,
-                        None => {
-                            let resp = encode_get_field_error(
-                                request_id,
-                                &format!("sub-field '{}' not found", field_path),
-                                version,
-                                is_be,
-                            );
-                            send_msg(state, conn_id, resp).await;
-                            return;
-                        }
+    if let Some(sid) = sid
+        && let Some(pv_name) = conn_state.sid_to_pv.get(&sid)
+    {
+        if let Some(nt) = get_nt_snapshot(state, pv_name).await {
+            let full_desc = nt_payload_desc(&nt);
+            // If a sub-field name was requested, filter the introspection
+            let sub = payload.field_name.as_deref().filter(|s| !s.is_empty());
+            let desc = if let Some(field_path) = sub {
+                use spvirit_codec::spvd_decode::extract_subfield_desc;
+                match extract_subfield_desc(&full_desc, field_path) {
+                    Some(sub_desc) => sub_desc,
+                    None => {
+                        let resp = encode_get_field_error(
+                            request_id,
+                            &format!("sub-field '{}' not found", field_path),
+                            version,
+                            is_be,
+                        );
+                        send_msg(state, conn_id, resp).await;
+                        return;
                     }
-                } else {
-                    full_desc
-                };
-                let resp = encode_get_field_response(request_id, &desc, version, is_be);
-                dump_hex_packet(conn_id, "tx", "cmd=17 get_field", version, is_be, &resp);
-                send_msg(state, conn_id, resp).await;
-                debug!(
-                    "Conn {}: get_field cid={} sid={:?} ioid={:?} resolved_sid={} pv='{}' field={:?}",
-                    conn_id, payload.cid, payload.sid, payload.ioid, sid, pv_name, payload.field_name
-                );
-                return;
-            }
-            let resp = encode_get_field_error(request_id, "PV not found", version, is_be);
+                }
+            } else {
+                full_desc
+            };
+            let resp = encode_get_field_response(request_id, &desc, version, is_be);
+            dump_hex_packet(conn_id, "tx", "cmd=17 get_field", version, is_be, &resp);
             send_msg(state, conn_id, resp).await;
+            debug!(
+                "Conn {}: get_field cid={} sid={:?} ioid={:?} resolved_sid={} pv='{}' field={:?}",
+                conn_id, payload.cid, payload.sid, payload.ioid, sid, pv_name, payload.field_name
+            );
             return;
         }
+        let resp = encode_get_field_error(request_id, "PV not found", version, is_be);
+        send_msg(state, conn_id, resp).await;
+        return;
     }
 
     if state.pvlist_mode != PvListMode::List {
@@ -1792,8 +1794,12 @@ async fn handle_get_field_request(
     }
 
     let Some(pattern) = requested_pvlist_pattern(payload.field_name.as_deref()) else {
-        let resp =
-            encode_get_field_error(request_id, "GET_FIELD requires a valid list pattern", version, is_be);
+        let resp = encode_get_field_error(
+            request_id,
+            "GET_FIELD requires a valid list pattern",
+            version,
+            is_be,
+        );
         send_msg(state, conn_id, resp).await;
         return;
     };
@@ -1809,13 +1815,21 @@ async fn handle_get_field_request(
         names.retain(|name| wildcard_match(pattern, name));
     }
     if names.is_empty() {
-        let resp = encode_get_field_error(request_id, "No PVs matched list request", version, is_be);
+        let resp =
+            encode_get_field_error(request_id, "No PVs matched list request", version, is_be);
         send_msg(state, conn_id, resp).await;
         return;
     }
     let desc = build_pvlist_structure(&names);
     let resp = encode_get_field_response(request_id, &desc, version, is_be);
-    dump_hex_packet(conn_id, "tx", "cmd=17 get_field_list", version, is_be, &resp);
+    dump_hex_packet(
+        conn_id,
+        "tx",
+        "cmd=17 get_field_list",
+        version,
+        is_be,
+        &resp,
+    );
     send_msg(state, conn_id, resp).await;
     debug!(
         "Conn {}: get_field list pattern='{}' returned {} entries",
@@ -1855,9 +1869,11 @@ async fn handle_server_rpc(
             state.pvlist_max,
         )
     };
-    let payload = NtPayload::ScalarArray(spvirit_tools::spvirit_server::types::NtScalarArray::from_value(
-        ScalarArrayValue::Str(names),
-    ));
+    let payload = NtPayload::ScalarArray(
+        spvirit_tools::spvirit_server::types::NtScalarArray::from_value(ScalarArrayValue::Str(
+            names,
+        )),
+    );
 
     let is_init = (subcmd & 0x08) != 0;
     if is_init {
@@ -1887,9 +1903,11 @@ fn virtual_event_nt(pv_name: &str) -> NtPayload {
 }
 
 fn virtual_pvlist_nt(entries: Vec<String>) -> NtPayload {
-    NtPayload::ScalarArray(spvirit_tools::spvirit_server::types::NtScalarArray::from_value(
-        ScalarArrayValue::Str(entries),
-    ))
+    NtPayload::ScalarArray(
+        spvirit_tools::spvirit_server::types::NtScalarArray::from_value(ScalarArrayValue::Str(
+            entries,
+        )),
+    )
 }
 
 async fn get_nt_snapshot(state: &Arc<ServerState>, pv_name: &str) -> Option<NtPayload> {
@@ -2121,14 +2139,12 @@ fn process_record_by_name(
     };
 
     let mut disabled = disa;
-    if !disabled {
-        if let Some(link) = sdis.as_ref() {
-            if let Some(ScalarValue::Bool(true)) =
-                read_link_value(store, link, compute_alarms, active, changed_names)
-            {
-                disabled = true;
-            }
-        }
+    if !disabled
+        && let Some(link) = sdis.as_ref()
+        && let Some(ScalarValue::Bool(true)) =
+            read_link_value(store, link, compute_alarms, active, changed_names)
+    {
+        disabled = true;
     }
     if disabled {
         if let Some(record) = store.get_mut(pv_name) {
@@ -2184,12 +2200,10 @@ fn process_record_body(
             if let Some(link) = chosen {
                 if let Some(value) =
                     read_link_value(store, link, compute_alarms, active, changed_names)
+                    && let Some(v) = scalar_to_f64(&value)
+                    && let Some(record) = store.get_mut(pv_name)
                 {
-                    if let Some(v) = scalar_to_f64(&value) {
-                        if let Some(record) = store.get_mut(pv_name) {
-                            record.set_scalar_value(ScalarValue::F64(v), compute_alarms);
-                        }
-                    }
+                    record.set_scalar_value(ScalarValue::F64(v), compute_alarms);
                 }
             } else if simm {
                 let _ = siml;
@@ -2210,37 +2224,34 @@ fn process_record_body(
                 .get(pv_name)
                 .and_then(|rec| scalar_to_f64(&rec.current_value()))
                 .unwrap_or(0.0);
-            if matches!(omsl, OutputMode::ClosedLoop) {
-                if let Some(link) = dol.as_ref() {
-                    if let Some(value) =
-                        read_link_value(store, link, compute_alarms, active, changed_names)
-                    {
-                        if let Some(v) = scalar_to_f64(&value) {
-                            next = v;
-                        }
-                    }
-                }
+            if matches!(omsl, OutputMode::ClosedLoop)
+                && let Some(link) = dol.as_ref()
+                && let Some(value) =
+                    read_link_value(store, link, compute_alarms, active, changed_names)
+                && let Some(v) = scalar_to_f64(&value)
+            {
+                next = v;
             }
-            if let Some(min) = drvl {
-                if next < min {
-                    next = min;
-                }
+            if let Some(min) = drvl
+                && next < min
+            {
+                next = min;
             }
-            if let Some(max) = drvh {
-                if next > max {
-                    next = max;
-                }
+            if let Some(max) = drvh
+                && next > max
+            {
+                next = max;
             }
             let prev = store
                 .get(pv_name)
                 .and_then(|rec| scalar_to_f64(&rec.current_value()))
                 .unwrap_or(next);
-            if let Some(limit) = oroc {
-                if limit > 0.0 {
-                    let delta = next - prev;
-                    if delta.abs() > limit {
-                        next = prev + delta.signum() * limit;
-                    }
+            if let Some(limit) = oroc
+                && limit > 0.0
+            {
+                let delta = next - prev;
+                if delta.abs() > limit {
+                    next = prev + delta.signum() * limit;
                 }
             }
             if let Some(record) = store.get_mut(pv_name) {
@@ -2270,16 +2281,13 @@ fn process_record_body(
             } else {
                 inp.as_ref()
             };
-            if let Some(link) = chosen {
-                if let Some(value) =
+            if let Some(link) = chosen
+                && let Some(value) =
                     read_link_value(store, link, compute_alarms, active, changed_names)
-                {
-                    if let Some(v) = scalar_to_bool(&value) {
-                        if let Some(record) = store.get_mut(pv_name) {
-                            record.set_scalar_value(ScalarValue::Bool(v), compute_alarms);
-                        }
-                    }
-                }
+                && let Some(v) = scalar_to_bool(&value)
+                && let Some(record) = store.get_mut(pv_name)
+            {
+                record.set_scalar_value(ScalarValue::Bool(v), compute_alarms);
             }
         }
         RecordData::Bo {
@@ -2294,16 +2302,13 @@ fn process_record_body(
                 .get(pv_name)
                 .and_then(|rec| scalar_to_bool(&rec.current_value()))
                 .unwrap_or(false);
-            if matches!(omsl, OutputMode::ClosedLoop) {
-                if let Some(link) = dol.as_ref() {
-                    if let Some(value) =
-                        read_link_value(store, link, compute_alarms, active, changed_names)
-                    {
-                        if let Some(v) = scalar_to_bool(&value) {
-                            next = v;
-                        }
-                    }
-                }
+            if matches!(omsl, OutputMode::ClosedLoop)
+                && let Some(link) = dol.as_ref()
+                && let Some(value) =
+                    read_link_value(store, link, compute_alarms, active, changed_names)
+                && let Some(v) = scalar_to_bool(&value)
+            {
+                next = v;
             }
             if let Some(record) = store.get_mut(pv_name) {
                 record.set_scalar_value(ScalarValue::Bool(next), compute_alarms);
@@ -2332,16 +2337,13 @@ fn process_record_body(
             } else {
                 inp.as_ref()
             };
-            if let Some(link) = chosen {
-                if let Some(value) =
+            if let Some(link) = chosen
+                && let Some(value) =
                     read_link_value(store, link, compute_alarms, active, changed_names)
-                {
-                    if let Some(v) = scalar_to_string(&value) {
-                        if let Some(record) = store.get_mut(pv_name) {
-                            record.set_scalar_value(ScalarValue::Str(v), compute_alarms);
-                        }
-                    }
-                }
+                && let Some(v) = scalar_to_string(&value)
+                && let Some(record) = store.get_mut(pv_name)
+            {
+                record.set_scalar_value(ScalarValue::Str(v), compute_alarms);
             }
         }
         RecordData::StringOut {
@@ -2356,16 +2358,13 @@ fn process_record_body(
                 .get(pv_name)
                 .and_then(|rec| scalar_to_string(&rec.current_value()))
                 .unwrap_or_default();
-            if matches!(omsl, OutputMode::ClosedLoop) {
-                if let Some(link) = dol.as_ref() {
-                    if let Some(value) =
-                        read_link_value(store, link, compute_alarms, active, changed_names)
-                    {
-                        if let Some(v) = scalar_to_string(&value) {
-                            next = v;
-                        }
-                    }
-                }
+            if matches!(omsl, OutputMode::ClosedLoop)
+                && let Some(link) = dol.as_ref()
+                && let Some(value) =
+                    read_link_value(store, link, compute_alarms, active, changed_names)
+                && let Some(v) = scalar_to_string(&value)
+            {
+                next = v;
             }
             if let Some(record) = store.get_mut(pv_name) {
                 record.set_scalar_value(ScalarValue::Str(next.clone()), compute_alarms);
@@ -2387,14 +2386,12 @@ fn process_record_body(
             }
         }
         RecordData::Waveform { inp, .. } | RecordData::Aai { inp, .. } => {
-            if let Some(link) = inp.as_ref() {
-                if let Some(arr) =
+            if let Some(link) = inp.as_ref()
+                && let Some(arr) =
                     read_link_array_value(store, link, compute_alarms, active, changed_names)
-                {
-                    if let Some(record) = store.get_mut(pv_name) {
-                        set_record_array_value(record, arr);
-                    }
-                }
+                && let Some(record) = store.get_mut(pv_name)
+            {
+                set_record_array_value(record, arr);
             }
         }
         RecordData::Aao { out, dol, omsl, .. } => {
@@ -2402,14 +2399,12 @@ fn process_record_body(
                 // Keep default deterministic in case parser left this empty.
                 ScalarArrayValue::F64(Vec::new()),
             );
-            if matches!(omsl, OutputMode::ClosedLoop) {
-                if let Some(link) = dol.as_ref() {
-                    if let Some(arr) =
-                        read_link_array_value(store, link, compute_alarms, active, changed_names)
-                    {
-                        next = arr;
-                    }
-                }
+            if matches!(omsl, OutputMode::ClosedLoop)
+                && let Some(link) = dol.as_ref()
+                && let Some(arr) =
+                    read_link_array_value(store, link, compute_alarms, active, changed_names)
+            {
+                next = arr;
             }
             if let Some(record) = store.get_mut(pv_name) {
                 set_record_array_value(record, next.clone());
@@ -2440,51 +2435,55 @@ fn process_record_body(
             }
         }
         RecordData::NtTable { inp, out, omsl, .. } => {
-            if let Some(link) = inp.as_ref() {
-                if let Some(arr) =
+            if let Some(link) = inp.as_ref()
+                && let Some(arr) =
                     read_link_array_value(store, link, compute_alarms, active, changed_names)
-                {
-                    if let Some(record) = store.get_mut(pv_name) {
-                        set_record_array_value(record, arr);
-                    }
-                }
+                && let Some(record) = store.get_mut(pv_name)
+            {
+                set_record_array_value(record, arr);
             }
             if matches!(omsl, OutputMode::ClosedLoop) {
                 // closed-loop NtTable: intentionally no-op for now (table DOL not supported)
             }
-            if let Some(link) = out.as_ref() {
-                if let Some(record) = store.get(pv_name) {
-                    if let NtPayload::Table(nt) = record.data.payload() {
-                        for col in &nt.columns {
-                            write_link_array_value(
-                                store, link, col.values.clone(), compute_alarms, active, changed_names,
-                            );
-                        }
-                    }
+            if let Some(link) = out.as_ref()
+                && let Some(record) = store.get(pv_name)
+                && let NtPayload::Table(nt) = record.data.payload()
+            {
+                for col in &nt.columns {
+                    write_link_array_value(
+                        store,
+                        link,
+                        col.values.clone(),
+                        compute_alarms,
+                        active,
+                        changed_names,
+                    );
                 }
             }
         }
         RecordData::NtNdArray { inp, out, omsl, .. } => {
-            if let Some(link) = inp.as_ref() {
-                if let Some(arr) =
+            if let Some(link) = inp.as_ref()
+                && let Some(arr) =
                     read_link_array_value(store, link, compute_alarms, active, changed_names)
-                {
-                    if let Some(record) = store.get_mut(pv_name) {
-                        set_record_array_value(record, arr);
-                    }
-                }
+                && let Some(record) = store.get_mut(pv_name)
+            {
+                set_record_array_value(record, arr);
             }
             if matches!(omsl, OutputMode::ClosedLoop) {
                 // closed-loop NtNdArray: intentionally no-op for now (ndarray DOL not supported)
             }
-            if let Some(link) = out.as_ref() {
-                if let Some(record) = store.get(pv_name) {
-                    if let NtPayload::NdArray(nt) = record.data.payload() {
-                        write_link_array_value(
-                            store, link, nt.value.clone(), compute_alarms, active, changed_names,
-                        );
-                    }
-                }
+            if let Some(link) = out.as_ref()
+                && let Some(record) = store.get(pv_name)
+                && let NtPayload::NdArray(nt) = record.data.payload()
+            {
+                write_link_array_value(
+                    store,
+                    link,
+                    nt.value.clone(),
+                    compute_alarms,
+                    active,
+                    changed_names,
+                );
             }
         }
         RecordData::NtStructure { .. } => {
@@ -2583,10 +2582,10 @@ fn write_link_value(
     } = link
     {
         let resolved = normalize_link_target(target);
-        if let Some(target_record) = store.get_mut(&resolved) {
-            if target_record.set_scalar_value(value, compute_alarms) {
-                changed_names.insert(resolved.clone());
-            }
+        if let Some(target_record) = store.get_mut(&resolved)
+            && target_record.set_scalar_value(value, compute_alarms)
+        {
+            changed_names.insert(resolved.clone());
         }
         if *process_passive {
             process_record_by_name(store, &resolved, compute_alarms, active, changed_names);
@@ -2793,7 +2792,10 @@ fn apply_scalar_array_put(
     false
 }
 
-fn apply_table_put(nt: &mut spvirit_tools::spvirit_server::types::NtTable, value: &DecodedValue) -> bool {
+fn apply_table_put(
+    nt: &mut spvirit_tools::spvirit_server::types::NtTable,
+    value: &DecodedValue,
+) -> bool {
     let DecodedValue::Structure(fields) = value else {
         return false;
     };
@@ -2812,13 +2814,12 @@ fn apply_table_put(nt: &mut spvirit_tools::spvirit_server::types::NtTable, value
             "value" => {
                 if let DecodedValue::Structure(cols) = field_value {
                     for (col_name, col_value) in cols {
-                        if let Some(col) = nt.columns.iter_mut().find(|c| c.name == *col_name) {
-                            if let Some(next) = decoded_to_scalar_array(col_value, &col.values) {
-                                if col.values != next {
-                                    col.values = next;
-                                    changed = true;
-                                }
-                            }
+                        if let Some(col) = nt.columns.iter_mut().find(|c| c.name == *col_name)
+                            && let Some(next) = decoded_to_scalar_array(col_value, &col.values)
+                            && col.values != next
+                        {
+                            col.values = next;
+                            changed = true;
                         }
                     }
                 }
@@ -2833,19 +2834,19 @@ fn apply_table_put(nt: &mut spvirit_tools::spvirit_server::types::NtTable, value
                 }
             }
             "alarm" => {
-                if let Some(alarm) = decode_nt_alarm(field_value) {
-                    if nt.alarm.as_ref() != Some(&alarm) {
-                        nt.alarm = Some(alarm);
-                        changed = true;
-                    }
+                if let Some(alarm) = decode_nt_alarm(field_value)
+                    && nt.alarm.as_ref() != Some(&alarm)
+                {
+                    nt.alarm = Some(alarm);
+                    changed = true;
                 }
             }
             "timeStamp" => {
-                if let Some(ts) = decode_nt_timestamp(field_value) {
-                    if nt.time_stamp.as_ref() != Some(&ts) {
-                        nt.time_stamp = Some(ts);
-                        changed = true;
-                    }
+                if let Some(ts) = decode_nt_timestamp(field_value)
+                    && nt.time_stamp.as_ref() != Some(&ts)
+                {
+                    nt.time_stamp = Some(ts);
+                    changed = true;
                 }
             }
             _ => {}
@@ -2854,7 +2855,10 @@ fn apply_table_put(nt: &mut spvirit_tools::spvirit_server::types::NtTable, value
     changed
 }
 
-fn apply_ndarray_put(nt: &mut spvirit_tools::spvirit_server::types::NtNdArray, value: &DecodedValue) -> bool {
+fn apply_ndarray_put(
+    nt: &mut spvirit_tools::spvirit_server::types::NtNdArray,
+    value: &DecodedValue,
+) -> bool {
     let DecodedValue::Structure(fields) = value else {
         return false;
     };
@@ -2862,50 +2866,46 @@ fn apply_ndarray_put(nt: &mut spvirit_tools::spvirit_server::types::NtNdArray, v
     for (name, field_value) in fields {
         match name.as_str() {
             "value" => {
-                if let Some(next) = decoded_to_scalar_array(field_value, &nt.value) {
-                    if nt.value != next {
-                        nt.value = next;
-                        changed = true;
-                    }
+                if let Some(next) = decoded_to_scalar_array(field_value, &nt.value)
+                    && nt.value != next
+                {
+                    nt.value = next;
+                    changed = true;
                 }
             }
             "compressedSize" => {
-                if let Some(v) = decoded_to_i64(field_value) {
-                    if nt.compressed_size != v {
-                        nt.compressed_size = v;
-                        changed = true;
-                    }
+                if let Some(v) = decoded_to_i64(field_value)
+                    && nt.compressed_size != v
+                {
+                    nt.compressed_size = v;
+                    changed = true;
                 }
             }
             "uncompressedSize" => {
-                if let Some(v) = decoded_to_i64(field_value) {
-                    if nt.uncompressed_size != v {
-                        nt.uncompressed_size = v;
-                        changed = true;
-                    }
+                if let Some(v) = decoded_to_i64(field_value)
+                    && nt.uncompressed_size != v
+                {
+                    nt.uncompressed_size = v;
+                    changed = true;
                 }
             }
             "uniqueId" => {
-                if let Some(v) = decoded_to_i32(field_value) {
-                    if nt.unique_id != v {
-                        nt.unique_id = v;
-                        changed = true;
-                    }
+                if let Some(v) = decoded_to_i32(field_value)
+                    && nt.unique_id != v
+                {
+                    nt.unique_id = v;
+                    changed = true;
                 }
             }
             "codec" => {
                 if let DecodedValue::Structure(codec_fields) = field_value {
                     for (cname, cval) in codec_fields {
-                        match cname.as_str() {
-                            "name" => {
-                                if let Some(s) = decoded_to_string(cval) {
-                                    if nt.codec.name != s {
-                                        nt.codec.name = s;
-                                        changed = true;
-                                    }
-                                }
-                            }
-                            _ => {}
+                        if cname.as_str() == "name"
+                            && let Some(s) = decoded_to_string(cval)
+                            && nt.codec.name != s
+                        {
+                            nt.codec.name = s;
+                            changed = true;
                         }
                     }
                 }
@@ -2917,11 +2917,31 @@ fn apply_ndarray_put(nt: &mut spvirit_tools::spvirit_server::types::NtNdArray, v
                         .filter_map(|item| {
                             if let DecodedValue::Structure(fs) = item {
                                 Some(spvirit_tools::spvirit_server::types::NdDimension {
-                                    size: fs.iter().find(|(n, _)| n == "size").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0),
-                                    offset: fs.iter().find(|(n, _)| n == "offset").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0),
-                                    full_size: fs.iter().find(|(n, _)| n == "fullSize").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0),
-                                    binning: fs.iter().find(|(n, _)| n == "binning").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(1),
-                                    reverse: fs.iter().find(|(n, _)| n == "reverse").and_then(|(_, v)| decoded_to_bool(v)).unwrap_or(false),
+                                    size: fs
+                                        .iter()
+                                        .find(|(n, _)| n == "size")
+                                        .and_then(|(_, v)| decoded_to_i32(v))
+                                        .unwrap_or(0),
+                                    offset: fs
+                                        .iter()
+                                        .find(|(n, _)| n == "offset")
+                                        .and_then(|(_, v)| decoded_to_i32(v))
+                                        .unwrap_or(0),
+                                    full_size: fs
+                                        .iter()
+                                        .find(|(n, _)| n == "fullSize")
+                                        .and_then(|(_, v)| decoded_to_i32(v))
+                                        .unwrap_or(0),
+                                    binning: fs
+                                        .iter()
+                                        .find(|(n, _)| n == "binning")
+                                        .and_then(|(_, v)| decoded_to_i32(v))
+                                        .unwrap_or(1),
+                                    reverse: fs
+                                        .iter()
+                                        .find(|(n, _)| n == "reverse")
+                                        .and_then(|(_, v)| decoded_to_bool(v))
+                                        .unwrap_or(false),
                                 })
                             } else {
                                 None
@@ -2944,35 +2964,35 @@ fn apply_ndarray_put(nt: &mut spvirit_tools::spvirit_server::types::NtNdArray, v
                 }
             }
             "alarm" => {
-                if let Some(alarm) = decode_nt_alarm(field_value) {
-                    if nt.alarm.as_ref() != Some(&alarm) {
-                        nt.alarm = Some(alarm);
-                        changed = true;
-                    }
+                if let Some(alarm) = decode_nt_alarm(field_value)
+                    && nt.alarm.as_ref() != Some(&alarm)
+                {
+                    nt.alarm = Some(alarm);
+                    changed = true;
                 }
             }
             "timeStamp" => {
-                if let Some(ts) = decode_nt_timestamp(field_value) {
-                    if nt.time_stamp.as_ref() != Some(&ts) {
-                        nt.time_stamp = Some(ts);
-                        changed = true;
-                    }
+                if let Some(ts) = decode_nt_timestamp(field_value)
+                    && nt.time_stamp.as_ref() != Some(&ts)
+                {
+                    nt.time_stamp = Some(ts);
+                    changed = true;
                 }
             }
             "dataTimeStamp" => {
-                if let Some(ts) = decode_nt_timestamp(field_value) {
-                    if nt.data_time_stamp != ts {
-                        nt.data_time_stamp = ts;
-                        changed = true;
-                    }
+                if let Some(ts) = decode_nt_timestamp(field_value)
+                    && nt.data_time_stamp != ts
+                {
+                    nt.data_time_stamp = ts;
+                    changed = true;
                 }
             }
             "display" => {
-                if let Some(display) = decode_nt_display(field_value) {
-                    if nt.display.as_ref() != Some(&display) {
-                        nt.display = Some(display);
-                        changed = true;
-                    }
+                if let Some(display) = decode_nt_display(field_value)
+                    && nt.display.as_ref() != Some(&display)
+                {
+                    nt.display = Some(display);
+                    changed = true;
                 }
             }
             "attribute" => {
@@ -2981,11 +3001,31 @@ fn apply_ndarray_put(nt: &mut spvirit_tools::spvirit_server::types::NtNdArray, v
                         .iter()
                         .filter_map(|item| {
                             if let DecodedValue::Structure(fs) = item {
-                                let attr_name = fs.iter().find(|(n, _)| n == "name").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
-                                let attr_value = fs.iter().find(|(n, _)| n == "value").map(|(_, v)| decoded_to_scalar_value(v)).unwrap_or(ScalarValue::I32(0));
-                                let descriptor = fs.iter().find(|(n, _)| n == "descriptor").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
-                                let source_type = fs.iter().find(|(n, _)| n == "sourceType").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-                                let source = fs.iter().find(|(n, _)| n == "source").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
+                                let attr_name = fs
+                                    .iter()
+                                    .find(|(n, _)| n == "name")
+                                    .and_then(|(_, v)| decoded_to_string(v))
+                                    .unwrap_or_default();
+                                let attr_value = fs
+                                    .iter()
+                                    .find(|(n, _)| n == "value")
+                                    .map(|(_, v)| decoded_to_scalar_value(v))
+                                    .unwrap_or(ScalarValue::I32(0));
+                                let descriptor = fs
+                                    .iter()
+                                    .find(|(n, _)| n == "descriptor")
+                                    .and_then(|(_, v)| decoded_to_string(v))
+                                    .unwrap_or_default();
+                                let source_type = fs
+                                    .iter()
+                                    .find(|(n, _)| n == "sourceType")
+                                    .and_then(|(_, v)| decoded_to_i32(v))
+                                    .unwrap_or(0);
+                                let source = fs
+                                    .iter()
+                                    .find(|(n, _)| n == "source")
+                                    .and_then(|(_, v)| decoded_to_string(v))
+                                    .unwrap_or_default();
                                 Some(spvirit_tools::spvirit_server::types::NtAttribute {
                                     name: attr_name,
                                     value: attr_value,
@@ -3058,10 +3098,10 @@ fn decoded_to_scalar_array(
 }
 
 fn apply_value_update(nt: &mut NtScalar, val: &DecodedValue, compute_alarms: bool) -> bool {
-    if let DecodedValue::Structure(fields) = val {
-        if let Some((_, inner)) = fields.iter().find(|(name, _)| name == "value") {
-            return apply_value_update(nt, inner, compute_alarms);
-        }
+    if let DecodedValue::Structure(fields) = val
+        && let Some((_, inner)) = fields.iter().find(|(name, _)| name == "value")
+    {
+        return apply_value_update(nt, inner, compute_alarms);
     }
     match &mut nt.value {
         spvirit_tools::spvirit_server::types::ScalarValue::Bool(current) => {
@@ -3104,14 +3144,30 @@ fn apply_value_update(nt: &mut NtScalar, val: &DecodedValue, compute_alarms: boo
         _ => {
             if let Some(v) = decoded_to_f64(val) {
                 match &mut nt.value {
-                    spvirit_tools::spvirit_server::types::ScalarValue::I8(c) => { *c = v as i8; }
-                    spvirit_tools::spvirit_server::types::ScalarValue::I16(c) => { *c = v as i16; }
-                    spvirit_tools::spvirit_server::types::ScalarValue::I64(c) => { *c = v as i64; }
-                    spvirit_tools::spvirit_server::types::ScalarValue::U8(c) => { *c = v as u8; }
-                    spvirit_tools::spvirit_server::types::ScalarValue::U16(c) => { *c = v as u16; }
-                    spvirit_tools::spvirit_server::types::ScalarValue::U32(c) => { *c = v as u32; }
-                    spvirit_tools::spvirit_server::types::ScalarValue::U64(c) => { *c = v as u64; }
-                    spvirit_tools::spvirit_server::types::ScalarValue::F32(c) => { *c = v as f32; }
+                    spvirit_tools::spvirit_server::types::ScalarValue::I8(c) => {
+                        *c = v as i8;
+                    }
+                    spvirit_tools::spvirit_server::types::ScalarValue::I16(c) => {
+                        *c = v as i16;
+                    }
+                    spvirit_tools::spvirit_server::types::ScalarValue::I64(c) => {
+                        *c = v as i64;
+                    }
+                    spvirit_tools::spvirit_server::types::ScalarValue::U8(c) => {
+                        *c = v as u8;
+                    }
+                    spvirit_tools::spvirit_server::types::ScalarValue::U16(c) => {
+                        *c = v as u16;
+                    }
+                    spvirit_tools::spvirit_server::types::ScalarValue::U32(c) => {
+                        *c = v as u32;
+                    }
+                    spvirit_tools::spvirit_server::types::ScalarValue::U64(c) => {
+                        *c = v as u64;
+                    }
+                    spvirit_tools::spvirit_server::types::ScalarValue::F32(c) => {
+                        *c = v as f32;
+                    }
                     _ => return false,
                 }
                 if compute_alarms {
@@ -3398,32 +3454,94 @@ fn decode_nt_alarm(val: &DecodedValue) -> Option<spvirit_tools::spvirit_server::
     let DecodedValue::Structure(fields) = val else {
         return None;
     };
-    let severity = fields.iter().find(|(n, _)| n == "severity").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-    let status = fields.iter().find(|(n, _)| n == "status").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-    let message = fields.iter().find(|(n, _)| n == "message").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
-    Some(spvirit_tools::spvirit_server::types::NtAlarm { severity, status, message })
+    let severity = fields
+        .iter()
+        .find(|(n, _)| n == "severity")
+        .and_then(|(_, v)| decoded_to_i32(v))
+        .unwrap_or(0);
+    let status = fields
+        .iter()
+        .find(|(n, _)| n == "status")
+        .and_then(|(_, v)| decoded_to_i32(v))
+        .unwrap_or(0);
+    let message = fields
+        .iter()
+        .find(|(n, _)| n == "message")
+        .and_then(|(_, v)| decoded_to_string(v))
+        .unwrap_or_default();
+    Some(spvirit_tools::spvirit_server::types::NtAlarm {
+        severity,
+        status,
+        message,
+    })
 }
 
-fn decode_nt_timestamp(val: &DecodedValue) -> Option<spvirit_tools::spvirit_server::types::NtTimeStamp> {
+fn decode_nt_timestamp(
+    val: &DecodedValue,
+) -> Option<spvirit_tools::spvirit_server::types::NtTimeStamp> {
     let DecodedValue::Structure(fields) = val else {
         return None;
     };
-    let seconds = fields.iter().find(|(n, _)| n == "secondsPastEpoch").and_then(|(_, v)| decoded_to_i64(v)).unwrap_or(0);
-    let nanos = fields.iter().find(|(n, _)| n == "nanoseconds").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-    let user_tag = fields.iter().find(|(n, _)| n == "userTag").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-    Some(spvirit_tools::spvirit_server::types::NtTimeStamp { seconds_past_epoch: seconds, nanoseconds: nanos, user_tag })
+    let seconds = fields
+        .iter()
+        .find(|(n, _)| n == "secondsPastEpoch")
+        .and_then(|(_, v)| decoded_to_i64(v))
+        .unwrap_or(0);
+    let nanos = fields
+        .iter()
+        .find(|(n, _)| n == "nanoseconds")
+        .and_then(|(_, v)| decoded_to_i32(v))
+        .unwrap_or(0);
+    let user_tag = fields
+        .iter()
+        .find(|(n, _)| n == "userTag")
+        .and_then(|(_, v)| decoded_to_i32(v))
+        .unwrap_or(0);
+    Some(spvirit_tools::spvirit_server::types::NtTimeStamp {
+        seconds_past_epoch: seconds,
+        nanoseconds: nanos,
+        user_tag,
+    })
 }
 
-fn decode_nt_display(val: &DecodedValue) -> Option<spvirit_tools::spvirit_server::types::NtDisplay> {
+fn decode_nt_display(
+    val: &DecodedValue,
+) -> Option<spvirit_tools::spvirit_server::types::NtDisplay> {
     let DecodedValue::Structure(fields) = val else {
         return None;
     };
-    let limit_low = fields.iter().find(|(n, _)| n == "limitLow").and_then(|(_, v)| decoded_to_f64(v)).unwrap_or(0.0);
-    let limit_high = fields.iter().find(|(n, _)| n == "limitHigh").and_then(|(_, v)| decoded_to_f64(v)).unwrap_or(0.0);
-    let description = fields.iter().find(|(n, _)| n == "description").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
-    let units = fields.iter().find(|(n, _)| n == "units").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
-    let precision = fields.iter().find(|(n, _)| n == "precision").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-    Some(spvirit_tools::spvirit_server::types::NtDisplay { limit_low, limit_high, description, units, precision })
+    let limit_low = fields
+        .iter()
+        .find(|(n, _)| n == "limitLow")
+        .and_then(|(_, v)| decoded_to_f64(v))
+        .unwrap_or(0.0);
+    let limit_high = fields
+        .iter()
+        .find(|(n, _)| n == "limitHigh")
+        .and_then(|(_, v)| decoded_to_f64(v))
+        .unwrap_or(0.0);
+    let description = fields
+        .iter()
+        .find(|(n, _)| n == "description")
+        .and_then(|(_, v)| decoded_to_string(v))
+        .unwrap_or_default();
+    let units = fields
+        .iter()
+        .find(|(n, _)| n == "units")
+        .and_then(|(_, v)| decoded_to_string(v))
+        .unwrap_or_default();
+    let precision = fields
+        .iter()
+        .find(|(n, _)| n == "precision")
+        .and_then(|(_, v)| decoded_to_i32(v))
+        .unwrap_or(0);
+    Some(spvirit_tools::spvirit_server::types::NtDisplay {
+        limit_low,
+        limit_high,
+        description,
+        units,
+        precision,
+    })
 }
 
 fn decode_put_body(
@@ -3432,17 +3550,17 @@ fn decode_put_body(
     is_be: bool,
 ) -> Option<DecodedValue> {
     let decoder = PvdDecoder::new(is_be);
-    if let Some((value, _)) = decoder.decode_structure_with_bitset(body, desc) {
-        if !decoded_is_empty(&value) {
-            return Some(value);
-        }
+    if let Some((value, _)) = decoder.decode_structure_with_bitset(body, desc)
+        && !decoded_is_empty(&value)
+    {
+        return Some(value);
     }
-    if !body.is_empty() && body[0] == 0xFF {
-        if let Some((value, _)) = decoder.decode_structure_with_bitset(&body[1..], desc) {
-            if !decoded_is_empty(&value) {
-                return Some(value);
-            }
-        }
+    if !body.is_empty()
+        && body[0] == 0xFF
+        && let Some((value, _)) = decoder.decode_structure_with_bitset(&body[1..], desc)
+        && !decoded_is_empty(&value)
+    {
+        return Some(value);
     }
     if let Some(value) = decode_put_body_shifted_bitset(body, desc, is_be) {
         return Some(value);
@@ -3486,12 +3604,12 @@ fn decode_put_body_value_only(
     is_be: bool,
 ) -> Option<DecodedValue> {
     let decoder = PvdDecoder::new(is_be);
-    if let Some((size, consumed)) = decoder.decode_size(body) {
-        if consumed + size <= body.len() {
-            let data = &body[consumed + size..];
-            if let Some(value) = decode_value_only_from_data(data, desc, &decoder) {
-                return Some(value);
-            }
+    if let Some((size, consumed)) = decoder.decode_size(body)
+        && consumed + size <= body.len()
+    {
+        let data = &body[consumed + size..];
+        if let Some(value) = decode_value_only_from_data(data, desc, &decoder) {
+            return Some(value);
         }
     }
     decode_value_only_from_data(body, desc, &decoder)
@@ -3514,7 +3632,7 @@ fn shift_bitset_left(bitset: &[u8], shift: usize) -> Vec<u8> {
     }
     let total_bits = bitset.len() * 8;
     let new_bits = total_bits + shift;
-    let mut out = vec![0u8; (new_bits + 7) / 8];
+    let mut out = vec![0u8; new_bits.div_ceil(8)];
     for bit in 0..total_bits {
         if (bitset[bit / 8] & (1 << (bit % 8))) != 0 {
             let new_bit = bit + shift;
@@ -3557,140 +3675,6 @@ fn assemble_segmented_message(first_header: [u8; 8], payloads: Vec<Vec<u8>>) -> 
         out.extend_from_slice(&payload);
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use spvirit_codec::spvd_encode::{encode_nt_scalar_bitset_parts, nt_scalar_desc};
-
-    #[test]
-    fn decode_put_body_accepts_status_prefix() {
-        let nt = NtScalar::from_value(spvirit_tools::spvirit_server::types::ScalarValue::F64(2.5));
-        let desc = nt_scalar_desc(&nt.value);
-        let (bitset, values) = encode_nt_scalar_bitset_parts(&nt, false);
-        let mut body = Vec::new();
-        body.push(0xFF);
-        body.extend_from_slice(&bitset);
-        body.extend_from_slice(&values);
-
-        let decoded = decode_put_body(&body, &desc, false);
-        assert!(decoded.is_some());
-    }
-
-    #[test]
-    fn decode_put_body_accepts_bitset_without_struct_bit() {
-        let nt = NtScalar::from_value(spvirit_tools::spvirit_server::types::ScalarValue::F64(0.0));
-        let desc = nt_scalar_desc(&nt.value);
-        let mut body = Vec::new();
-        body.extend_from_slice(&encode_size_pvd(1, false));
-        body.push(0x01); // bit0 set (value) with no struct bit
-        body.extend_from_slice(&30.0f64.to_le_bytes());
-
-        let decoded = decode_put_body(&body, &desc, false).expect("decoded");
-        if let DecodedValue::Structure(fields) = decoded {
-            let value = fields
-                .iter()
-                .find(|(name, _)| name == "value")
-                .expect("value field");
-            assert!(matches!(value.1, DecodedValue::Float64(v) if (v - 30.0).abs() < 1e-6));
-        } else {
-            panic!("expected structure");
-        }
-    }
-
-    #[test]
-    fn decode_put_body_accepts_value_only_payload() {
-        let nt = NtScalar::from_value(spvirit_tools::spvirit_server::types::ScalarValue::F64(0.0));
-        let desc = nt_scalar_desc(&nt.value);
-        let body = 12.5f64.to_le_bytes();
-
-        let decoded = decode_put_body(&body, &desc, false).expect("decoded");
-        if let DecodedValue::Structure(fields) = decoded {
-            let value = fields
-                .iter()
-                .find(|(name, _)| name == "value")
-                .expect("value field");
-            assert!(matches!(value.1, DecodedValue::Float64(v) if (v - 12.5).abs() < 1e-6));
-        } else {
-            panic!("expected structure");
-        }
-    }
-
-    #[test]
-    fn apply_value_update_refreshes_alarm_from_limits() {
-        let mut nt = NtScalar::from_value(spvirit_tools::spvirit_server::types::ScalarValue::F64(0.0))
-            .with_alarm_limits(Some(-8.0), Some(8.0), Some(-9.5), Some(9.5));
-
-        let changed = apply_value_update(&mut nt, &DecodedValue::Float64(9.6), true);
-        assert!(changed);
-        assert_eq!(nt.alarm_severity, 2);
-        assert_eq!(nt.alarm_status, 1);
-        assert_eq!(nt.alarm_message, "HIHI");
-
-        let changed = apply_value_update(&mut nt, &DecodedValue::Float64(8.2), true);
-        assert!(changed);
-        assert_eq!(nt.alarm_severity, 1);
-        assert_eq!(nt.alarm_status, 1);
-        assert_eq!(nt.alarm_message, "HIGH");
-
-        let changed = apply_value_update(&mut nt, &DecodedValue::Float64(0.0), true);
-        assert!(changed);
-        assert_eq!(nt.alarm_severity, 0);
-        assert_eq!(nt.alarm_status, 0);
-        assert!(nt.alarm_message.is_empty());
-    }
-
-    #[test]
-    fn assemble_segmented_message_updates_length_and_clears_flags() {
-        let mut header = [0u8; 8];
-        header[0] = 0xCA;
-        header[1] = 0x02;
-        header[2] = 0x10; // first segment
-        header[3] = 11; // PUT
-        header[4..8].copy_from_slice(&3u32.to_le_bytes());
-
-        let payloads = vec![b"abc".to_vec(), b"def".to_vec()];
-        let full = assemble_segmented_message(header, payloads);
-
-        assert_eq!(full[0], 0xCA);
-        assert_eq!(full[1], 0x02);
-        assert_eq!(full[2] & 0x30, 0x00);
-        assert_eq!(u32::from_le_bytes(full[4..8].try_into().unwrap()), 6);
-        assert_eq!(&full[8..], b"abcdef");
-    }
-
-    #[test]
-    fn search_reply_target_prefers_payload_addr_and_port() {
-        let mut addr = [0u8; 16];
-        addr[10] = 0xFF;
-        addr[11] = 0xFF;
-        addr[12..16].copy_from_slice(&[130, 246, 90, 69]);
-        let peer: SocketAddr = "130.246.90.69:5076".parse().expect("peer");
-
-        let target = search_reply_target(&addr, 60292, peer);
-        assert_eq!(target, "130.246.90.69:60292".parse().unwrap());
-    }
-
-    #[test]
-    fn search_reply_target_falls_back_to_peer_when_payload_unspecified() {
-        let addr = [0u8; 16];
-        let peer: SocketAddr = "130.246.90.69:5076".parse().expect("peer");
-
-        let target = search_reply_target(&addr, 0, peer);
-        assert_eq!(target, peer);
-    }
-
-    #[test]
-    fn search_reply_target_falls_back_to_peer_ip_for_ipv4_any() {
-        let mut addr = [0u8; 16];
-        addr[10] = 0xFF;
-        addr[11] = 0xFF;
-        let peer: SocketAddr = "130.246.90.69:5076".parse().expect("peer");
-
-        let target = search_reply_target(&addr, 60292, peer);
-        assert_eq!(target, "130.246.90.69:60292".parse().unwrap());
-    }
 }
 
 fn file_mtime(path: &str) -> Option<SystemTime> {
@@ -3776,5 +3760,140 @@ fn dump_hex_packet(conn_id: u64, dir: &str, label: &str, version: u8, is_be: boo
         }
         debug!("Conn {}: {:04x} {}", conn_id, offset, line);
         offset += 16;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use spvirit_codec::spvd_encode::{encode_nt_scalar_bitset_parts, nt_scalar_desc};
+
+    #[test]
+    fn decode_put_body_accepts_status_prefix() {
+        let nt = NtScalar::from_value(spvirit_tools::spvirit_server::types::ScalarValue::F64(2.5));
+        let desc = nt_scalar_desc(&nt.value);
+        let (bitset, values) = encode_nt_scalar_bitset_parts(&nt, false);
+        let mut body = Vec::new();
+        body.push(0xFF);
+        body.extend_from_slice(&bitset);
+        body.extend_from_slice(&values);
+
+        let decoded = decode_put_body(&body, &desc, false);
+        assert!(decoded.is_some());
+    }
+
+    #[test]
+    fn decode_put_body_accepts_bitset_without_struct_bit() {
+        let nt = NtScalar::from_value(spvirit_tools::spvirit_server::types::ScalarValue::F64(0.0));
+        let desc = nt_scalar_desc(&nt.value);
+        let mut body = Vec::new();
+        body.extend_from_slice(&encode_size_pvd(1, false));
+        body.push(0x01); // bit0 set (value) with no struct bit
+        body.extend_from_slice(&30.0f64.to_le_bytes());
+
+        let decoded = decode_put_body(&body, &desc, false).expect("decoded");
+        if let DecodedValue::Structure(fields) = decoded {
+            let value = fields
+                .iter()
+                .find(|(name, _)| name == "value")
+                .expect("value field");
+            assert!(matches!(value.1, DecodedValue::Float64(v) if (v - 30.0).abs() < 1e-6));
+        } else {
+            panic!("expected structure");
+        }
+    }
+
+    #[test]
+    fn decode_put_body_accepts_value_only_payload() {
+        let nt = NtScalar::from_value(spvirit_tools::spvirit_server::types::ScalarValue::F64(0.0));
+        let desc = nt_scalar_desc(&nt.value);
+        let body = 12.5f64.to_le_bytes();
+
+        let decoded = decode_put_body(&body, &desc, false).expect("decoded");
+        if let DecodedValue::Structure(fields) = decoded {
+            let value = fields
+                .iter()
+                .find(|(name, _)| name == "value")
+                .expect("value field");
+            assert!(matches!(value.1, DecodedValue::Float64(v) if (v - 12.5).abs() < 1e-6));
+        } else {
+            panic!("expected structure");
+        }
+    }
+
+    #[test]
+    fn apply_value_update_refreshes_alarm_from_limits() {
+        let mut nt =
+            NtScalar::from_value(spvirit_tools::spvirit_server::types::ScalarValue::F64(0.0))
+                .with_alarm_limits(Some(-8.0), Some(8.0), Some(-9.5), Some(9.5));
+
+        let changed = apply_value_update(&mut nt, &DecodedValue::Float64(9.6), true);
+        assert!(changed);
+        assert_eq!(nt.alarm_severity, 2);
+        assert_eq!(nt.alarm_status, 1);
+        assert_eq!(nt.alarm_message, "HIHI");
+
+        let changed = apply_value_update(&mut nt, &DecodedValue::Float64(8.2), true);
+        assert!(changed);
+        assert_eq!(nt.alarm_severity, 1);
+        assert_eq!(nt.alarm_status, 1);
+        assert_eq!(nt.alarm_message, "HIGH");
+
+        let changed = apply_value_update(&mut nt, &DecodedValue::Float64(0.0), true);
+        assert!(changed);
+        assert_eq!(nt.alarm_severity, 0);
+        assert_eq!(nt.alarm_status, 0);
+        assert!(nt.alarm_message.is_empty());
+    }
+
+    #[test]
+    fn assemble_segmented_message_updates_length_and_clears_flags() {
+        let mut header = [0u8; 8];
+        header[0] = 0xCA;
+        header[1] = 0x02;
+        header[2] = 0x10; // first segment
+        header[3] = 11; // PUT
+        header[4..8].copy_from_slice(&3u32.to_le_bytes());
+
+        let payloads = vec![b"abc".to_vec(), b"def".to_vec()];
+        let full = assemble_segmented_message(header, payloads);
+
+        assert_eq!(full[0], 0xCA);
+        assert_eq!(full[1], 0x02);
+        assert_eq!(full[2] & 0x30, 0x00);
+        assert_eq!(u32::from_le_bytes(full[4..8].try_into().unwrap()), 6);
+        assert_eq!(&full[8..], b"abcdef");
+    }
+
+    #[test]
+    fn search_reply_target_prefers_payload_addr_and_port() {
+        let mut addr = [0u8; 16];
+        addr[10] = 0xFF;
+        addr[11] = 0xFF;
+        addr[12..16].copy_from_slice(&[130, 246, 90, 69]);
+        let peer: SocketAddr = "130.246.90.69:5076".parse().expect("peer");
+
+        let target = search_reply_target(&addr, 60292, peer);
+        assert_eq!(target, "130.246.90.69:60292".parse().unwrap());
+    }
+
+    #[test]
+    fn search_reply_target_falls_back_to_peer_when_payload_unspecified() {
+        let addr = [0u8; 16];
+        let peer: SocketAddr = "130.246.90.69:5076".parse().expect("peer");
+
+        let target = search_reply_target(&addr, 0, peer);
+        assert_eq!(target, peer);
+    }
+
+    #[test]
+    fn search_reply_target_falls_back_to_peer_ip_for_ipv4_any() {
+        let mut addr = [0u8; 16];
+        addr[10] = 0xFF;
+        addr[11] = 0xFF;
+        let peer: SocketAddr = "130.246.90.69:5076".parse().expect("peer");
+
+        let target = search_reply_target(&addr, 60292, peer);
+        assert_eq!(target, "130.246.90.69:60292".parse().unwrap());
     }
 }

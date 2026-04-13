@@ -267,14 +267,14 @@ impl RecordInstance {
         if self.record_type.is_output() {
             return true;
         }
-        match &self.data {
-            RecordData::Ai { simm: true, .. } => true,
-            RecordData::Waveform { .. } => true,
-            RecordData::NtTable { .. } => true,
-            RecordData::NtNdArray { .. } => true,
-            RecordData::NtStructure { .. } => true,
-            _ => false,
-        }
+        matches!(
+            &self.data,
+            RecordData::Ai { simm: true, .. }
+                | RecordData::Waveform { .. }
+                | RecordData::NtTable { .. }
+                | RecordData::NtNdArray { .. }
+                | RecordData::NtStructure { .. }
+        )
     }
 
     pub fn to_ntpayload(&self) -> NtPayload {
@@ -501,18 +501,38 @@ impl RecordInstance {
                 match target {
                     ScalarValue::Bool(current) => {
                         let next = as_f64 != 0.0;
-                        if *current == next { false } else { *current = next; true }
+                        if *current == next {
+                            false
+                        } else {
+                            *current = next;
+                            true
+                        }
                     }
                     ScalarValue::I32(current) => {
                         let next = as_f64 as i32;
-                        if *current == next { false } else { *current = next; true }
+                        if *current == next {
+                            false
+                        } else {
+                            *current = next;
+                            true
+                        }
                     }
                     ScalarValue::F64(current) => {
-                        if (*current - as_f64).abs() < f64::EPSILON { false } else { *current = as_f64; true }
+                        if (*current - as_f64).abs() < f64::EPSILON {
+                            false
+                        } else {
+                            *current = as_f64;
+                            true
+                        }
                     }
                     ScalarValue::Str(current) => {
                         let next = as_f64.to_string();
-                        if *current == next { false } else { *current = next; true }
+                        if *current == next {
+                            false
+                        } else {
+                            *current = next;
+                            true
+                        }
                     }
                     _ => false,
                 }

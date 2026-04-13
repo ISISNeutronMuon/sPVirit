@@ -7,13 +7,13 @@ use crate::search::resolve_pv_server;
 use crate::transport::{read_packet, read_until};
 use crate::types::{PvGetError, PvGetOptions, PvGetResult};
 use spvirit_codec::epics_decode::{
-    decode_op_response_status as codec_decode_op_response_status, PvaPacket, PvaPacketCommand,
+    PvaPacket, PvaPacketCommand, decode_op_response_status as codec_decode_op_response_status,
 };
+use spvirit_codec::spvirit_encode::encode_client_connection_validation;
 pub use spvirit_codec::spvirit_encode::{
     encode_create_channel_request, encode_get_field_request, encode_get_request,
     encode_monitor_request, encode_put_request,
 };
-use spvirit_codec::spvirit_encode::encode_client_connection_validation;
 
 pub fn build_client_validation(
     opts: &crate::types::PvGetOptions,
@@ -120,7 +120,7 @@ pub async fn establish_channel(
         _ => {
             return Err(PvGetError::Protocol(
                 "unexpected create_channel response".to_string(),
-            ))
+            ));
         }
     };
 
@@ -173,7 +173,7 @@ pub async fn pvget(opts: &PvGetOptions) -> Result<PvGetResult, PvGetError> {
         _ => {
             return Err(PvGetError::Protocol(
                 "unexpected get init response".to_string(),
-            ))
+            ));
         }
     };
 

@@ -52,10 +52,10 @@ where
         let remaining = deadline - now;
         let bytes = read_packet(stream, remaining).await?;
         let mut pkt = PvaPacket::new(&bytes);
-        if let Some(cmd) = pkt.decode_payload() {
-            if predicate(&cmd) {
-                return Ok(bytes);
-            }
+        if let Some(cmd) = pkt.decode_payload()
+            && predicate(&cmd)
+        {
+            return Ok(bytes);
         }
     }
 }

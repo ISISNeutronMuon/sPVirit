@@ -12,17 +12,21 @@ pub fn workspace_bin(name: &str) -> String {
     let ext = if cfg!(windows) { ".exe" } else { "" };
     let test_exe = std::env::current_exe().expect("cannot locate test executable");
     test_exe
-        .parent().unwrap()
-        .parent().unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .join(format!("{name}{ext}"))
         .to_string_lossy()
         .to_string()
 }
 
-use spvirit_tools::spvirit_client::client::{build_client_validation, encode_create_channel_request};
-use spvirit_tools::spvirit_client::types::PvGetOptions;
 use spvirit_codec::epics_decode::{PvaHeader, PvaPacket, PvaPacketCommand};
 use spvirit_codec::spvirit_encode::encode_header;
+use spvirit_tools::spvirit_client::client::{
+    build_client_validation, encode_create_channel_request,
+};
+use spvirit_tools::spvirit_client::types::PvGetOptions;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
@@ -265,17 +269,18 @@ impl TestSession {
             }
             let remain = deadline - now;
             let (_raw, cmd) = self.read_decoded_packet(remain).await?;
-            if let PvaPacketCommand::CreateChannel(payload) = cmd {
-                if payload.is_server && payload.cid == cid {
-                    if let Some(status) = payload.status {
-                        return Err(format!(
-                            "create channel failed code={} msg={}",
-                            status.code,
-                            status.message.unwrap_or_default()
-                        ));
-                    }
-                    return Ok(payload.sid);
+            if let PvaPacketCommand::CreateChannel(payload) = cmd
+                && payload.is_server
+                && payload.cid == cid
+            {
+                if let Some(status) = payload.status {
+                    return Err(format!(
+                        "create channel failed code={} msg={}",
+                        status.code,
+                        status.message.unwrap_or_default()
+                    ));
                 }
+                return Ok(payload.sid);
             }
         }
     }

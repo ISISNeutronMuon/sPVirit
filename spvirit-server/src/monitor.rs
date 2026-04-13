@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tracing::debug;
 
 use spvirit_codec::spvirit_encode::encode_monitor_data_response_payload;
@@ -18,6 +18,12 @@ pub struct MonitorRegistry {
     pub monitors: Mutex<HashMap<String, Vec<MonitorSub>>>,
     /// Connection id → message sender.
     pub conns: Mutex<HashMap<u64, mpsc::Sender<Vec<u8>>>>,
+}
+
+impl Default for MonitorRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MonitorRegistry {
@@ -82,30 +88,29 @@ impl MonitorRegistry {
         let mut to_send: Option<(u64, Vec<u8>)> = None;
         {
             let mut monitors = self.monitors.lock().await;
-            if let Some(list) = monitors.get_mut(pv_name) {
-                if let Some(sub) = list
+            if let Some(list) = monitors.get_mut(pv_name)
+                && let Some(sub) = list
                     .iter_mut()
                     .find(|s| s.conn_id == conn_id && s.ioid == ioid)
-                {
-                    if !sub.running {
-                        return;
-                    }
-                    if sub.pipeline_enabled && sub.nfree == 0 {
-                        return;
-                    }
-                    let subcmd = 0x00;
-                    if sub.pipeline_enabled && sub.nfree > 0 {
-                        sub.nfree -= 1;
-                    }
-                    let msg = encode_monitor_data_response_payload(
-                        sub.ioid,
-                        subcmd,
-                        payload,
-                        sub.version,
-                        sub.is_be,
-                    );
-                    to_send = Some((sub.conn_id, msg));
+            {
+                if !sub.running {
+                    return;
                 }
+                if sub.pipeline_enabled && sub.nfree == 0 {
+                    return;
+                }
+                let subcmd = 0x00;
+                if sub.pipeline_enabled && sub.nfree > 0 {
+                    sub.nfree -= 1;
+                }
+                let msg = encode_monitor_data_response_payload(
+                    sub.ioid,
+                    subcmd,
+                    payload,
+                    sub.version,
+                    sub.is_be,
+                );
+                to_send = Some((sub.conn_id, msg));
             }
         }
 
@@ -125,33 +130,27 @@ impl MonitorRegistry {
         pipeline_enabled: Option<bool>,
     ) -> bool {
         let mut monitors = self.monitors.lock().await;
-        if let Some(list) = monitors.get_mut(pv_name) {
-            if let Some(sub) = list
+        if let Some(list) = monitors.get_mut(pv_name)
+            && let Some(sub) = list
                 .iter_mut()
                 .find(|s| s.conn_id == conn_id && s.ioid == ioid)
-            {
-                sub.running = running;
-                if let Some(v) = nfree {
-                    sub.nfree = v;
-                }
-                if let Some(enabled) = pipeline_enabled {
-                    if enabled {
-                        sub.pipeline_enabled = true;
-                    }
-                }
-                return true;
+        {
+            sub.running = running;
+            if let Some(v) = nfree {
+                sub.nfree = v;
             }
+            if let Some(enabled) = pipeline_enabled
+                && enabled
+            {
+                sub.pipeline_enabled = true;
+            }
+            return true;
         }
         false
     }
 
     /// Remove a monitor subscription.
-    pub async fn remove_monitor_subscription(
-        &self,
-        conn_id: u64,
-        ioid: u32,
-        pv_name: &str,
-    ) {
+    pub async fn remove_monitor_subscription(&self, conn_id: u64, ioid: u32, pv_name: &str) {
         let mut monitors = self.monitors.lock().await;
         if let Some(list) = monitors.get_mut(pv_name) {
             list.retain(|s| s.conn_id != conn_id || s.ioid != ioid);

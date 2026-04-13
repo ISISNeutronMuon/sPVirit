@@ -3,22 +3,18 @@ use tokio::io::AsyncWriteExt;
 use tokio::runtime::Runtime;
 
 use spvirit_client::{pvget, pvinfo as high_level_pvinfo};
+use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
+use spvirit_codec::spvd_decode::{StructureDesc, extract_subfield_desc, format_structure_tree};
+use spvirit_codec::spvirit_encode::encode_header;
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
-use spvirit_tools::spvirit_client::client::{establish_channel, ChannelConn};
+use spvirit_tools::spvirit_client::client::{ChannelConn, establish_channel};
 use spvirit_tools::spvirit_client::search::resolve_pv_server;
 use spvirit_tools::spvirit_client::transport::read_until;
 use spvirit_tools::spvirit_client::types::{PvGetError, PvGetOptions};
-use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
-use spvirit_codec::spvirit_encode::encode_header;
-use spvirit_codec::spvd_decode::{extract_subfield_desc, format_structure_tree, StructureDesc};
 
 /// Legacy fallback: GET_FIELD without the field-name wire field, for servers
 /// that crash when they receive an empty field-name string.
-fn encode_get_field_request_without_field_name(
-    cid: u32,
-    version: u8,
-    is_be: bool,
-) -> Vec<u8> {
+fn encode_get_field_request_without_field_name(cid: u32, version: u8, is_be: bool) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&if is_be {
         cid.to_be_bytes()
@@ -73,13 +69,7 @@ async fn pvinfo_no_field_name(opts: &PvGetOptions) -> Result<StructureDesc, PvGe
         PvaPacketCommand::GetField(payload) => payload.introspection.ok_or_else(|| {
             let status_msg = payload
                 .status
-                .map(|s| {
-                    format!(
-                        "code={} message={}",
-                        s.code,
-                        s.message.unwrap_or_default()
-                    )
-                })
+                .map(|s| format!("code={} message={}", s.code, s.message.unwrap_or_default()))
                 .unwrap_or_else(|| "unknown error".to_string());
             PvGetError::Protocol(format!("get_field failed: {}", status_msg))
         }),

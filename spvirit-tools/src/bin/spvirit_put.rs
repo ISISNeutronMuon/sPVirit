@@ -6,16 +6,16 @@ use tokio::io::AsyncWriteExt;
 use tokio::runtime::Runtime;
 
 use spvirit_client::pvput as high_level_pvput;
+use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
+use spvirit_codec::spvirit_encode::encode_header;
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
 use spvirit_tools::spvirit_client::client::{
-    encode_get_request, encode_put_request, ensure_status_ok, establish_channel, ChannelConn,
+    ChannelConn, encode_get_request, encode_put_request, ensure_status_ok, establish_channel,
 };
 use spvirit_tools::spvirit_client::put_encode::encode_put_payload;
 use spvirit_tools::spvirit_client::search::resolve_pv_server;
 use spvirit_tools::spvirit_client::transport::read_until;
 use spvirit_tools::spvirit_client::types::{PvGetError, PvGetOptions};
-use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
-use spvirit_codec::spvirit_encode::encode_header;
 
 fn parse_cli_value(raw: &str) -> Value {
     let lowered = raw.trim().to_ascii_lowercase();
@@ -25,10 +25,10 @@ fn parse_cli_value(raw: &str) -> Value {
     if lowered == "false" {
         return Value::Bool(false);
     }
-    if raw.contains('.') || raw.contains('e') || raw.contains('E') {
-        if let Ok(f) = raw.parse::<f64>() {
-            return Value::Number(serde_json::Number::from_f64(f).unwrap());
-        }
+    if (raw.contains('.') || raw.contains('e') || raw.contains('E'))
+        && let Ok(f) = raw.parse::<f64>()
+    {
+        return Value::Number(serde_json::Number::from_f64(f).unwrap());
     }
     if let Ok(i) = raw.parse::<i64>() {
         return Value::Number(serde_json::Number::from(i));
@@ -89,10 +89,7 @@ async fn run_get_cycle(
     Ok(())
 }
 
-async fn pvput_full_flow(
-    opts: &PvGetOptions,
-    input: &Value,
-) -> Result<(), PvGetError> {
+async fn pvput_full_flow(opts: &PvGetOptions, input: &Value) -> Result<(), PvGetError> {
     let target = resolve_pv_server(opts).await?;
 
     let conn = establish_channel(target, opts).await?;
@@ -141,11 +138,11 @@ async fn pvput_full_flow(
         _ => {
             return Err(PvGetError::Protocol(
                 "unexpected put init response".to_string(),
-            ))
+            ));
         }
     };
 
-    let payload = encode_put_payload(&desc, input, is_be).map_err(|e| PvGetError::Protocol(e))?;
+    let payload = encode_put_payload(&desc, input, is_be).map_err(PvGetError::Protocol)?;
 
     // EPICS-base-style probe/readback step before writing value.
     let put_get_req = encode_put_request(sid, put_ioid, 0x40, &[], version, is_be);
@@ -221,10 +218,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
              Usage: pvput PV=VALUE  or  pvput PV VALUE  or  pvput PV --json '{...}'\n\
              Use the PV=VALUE form to write negative numbers (e.g. pvput COUNTER=-1)",
         );
-        ap.refer(&mut pv_name)
-            .add_argument("pv", Store, "PV name, or PV=VALUE to set a value (supports negative numbers)");
-        ap.refer(&mut value_arg)
-            .add_argument("value", StoreOption, "Scalar value to write (positional, cannot start with -)");
+        ap.refer(&mut pv_name).add_argument(
+            "pv",
+            Store,
+            "PV name, or PV=VALUE to set a value (supports negative numbers)",
+        );
+        ap.refer(&mut value_arg).add_argument(
+            "value",
+            StoreOption,
+            "Scalar value to write (positional, cannot start with -)",
+        );
         ap.refer(&mut json_arg)
             .add_option(&["--json"], StoreOption, "JSON payload to write");
         common.add_to_parser(&mut ap);
@@ -246,13 +249,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Support PV=VALUE syntax: split on the first '=' in the pv_name argument.
     // This allows negative numbers (e.g. pvput COUNTER=-1) that would otherwise
     // be mis-parsed as flags.
-    if value_arg.is_none() && json_arg.is_none() {
-        if let Some(eq_pos) = pv_name.find('=') {
-            let val = pv_name[eq_pos + 1..].to_string();
-            pv_name.truncate(eq_pos);
-            if !val.is_empty() {
-                value_arg = Some(val);
-            }
+    if value_arg.is_none()
+        && json_arg.is_none()
+        && let Some(eq_pos) = pv_name.find('=')
+    {
+        let val = pv_name[eq_pos + 1..].to_string();
+        pv_name.truncate(eq_pos);
+        if !val.is_empty() {
+            value_arg = Some(val);
         }
     }
 
@@ -278,7 +282,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opts = common.into_pv_get_options(pv_name.clone())?;
 
     let rt = Runtime::new()?;
-    let result = rt.block_on(async move { pvput(&opts, &input, simple_flow, no_flow_fallback).await });
+    let result =
+        rt.block_on(async move { pvput(&opts, &input, simple_flow, no_flow_fallback).await });
     match result {
         Ok(()) => Ok(()),
         Err(e) => {

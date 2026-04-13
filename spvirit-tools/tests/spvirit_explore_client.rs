@@ -3,12 +3,12 @@ mod protocol;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
-use spvirit_client::pvlist::pvlist_with_fallback;
-use spvirit_tools::spvirit_client::explore::fetch_snapshot_from_server;
-use spvirit_tools::spvirit_client::search::{discover_servers, SearchTarget};
-use spvirit_tools::spvirit_client::types::PvGetOptions;
-use spvirit_codec::spvd_decode::DecodedValue;
 use protocol::frame_harness::TestServer;
+use spvirit_client::pvlist::pvlist_with_fallback;
+use spvirit_codec::spvd_decode::DecodedValue;
+use spvirit_tools::spvirit_client::explore::fetch_snapshot_from_server;
+use spvirit_tools::spvirit_client::search::{SearchTarget, discover_servers};
+use spvirit_tools::spvirit_client::types::PvGetOptions;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn discover_servers_finds_test_server() {
@@ -75,11 +75,13 @@ async fn fetch_snapshot_from_server_returns_value_and_structure() {
 
     assert_eq!(snapshot.pv_name, "SIM:AI");
     assert!(!snapshot.introspection.fields.is_empty());
-    assert!(snapshot
-        .introspection
-        .fields
-        .iter()
-        .any(|f| f.name == "value"));
+    assert!(
+        snapshot
+            .introspection
+            .fields
+            .iter()
+            .any(|f| f.name == "value")
+    );
     assert!(
         matches!(snapshot.value, DecodedValue::Structure(_)),
         "expected structured NT payload"

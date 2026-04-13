@@ -27,11 +27,9 @@ use spvirit_types::{NtScalar, NtScalarArray, ScalarArrayValue, ScalarValue};
 use crate::db::{load_db, parse_db};
 use crate::handler::PvListMode;
 use crate::monitor::MonitorRegistry;
-use crate::server::{run_pva_server_with_registry, PvaServerConfig};
+use crate::server::{PvaServerConfig, run_pva_server_with_registry};
 use crate::simple_store::{LinkDef, OnPutCallback, ScanCallback, SimplePvStore};
-use crate::types::{
-    DbCommonState, OutputMode, RecordData, RecordInstance, RecordType,
-};
+use crate::types::{DbCommonState, OutputMode, RecordData, RecordInstance, RecordType};
 
 // ─── PvaServerBuilder ────────────────────────────────────────────────────
 
@@ -129,7 +127,11 @@ impl PvaServerBuilder {
         let name = name.into();
         self.records.insert(
             name.clone(),
-            make_scalar_record(&name, RecordType::StringIn, ScalarValue::Str(initial.into())),
+            make_scalar_record(
+                &name,
+                RecordType::StringIn,
+                ScalarValue::Str(initial.into()),
+            ),
         );
         self
     }
@@ -139,7 +141,11 @@ impl PvaServerBuilder {
         let name = name.into();
         self.records.insert(
             name.clone(),
-            make_output_record(&name, RecordType::StringOut, ScalarValue::Str(initial.into())),
+            make_output_record(
+                &name,
+                RecordType::StringOut,
+                ScalarValue::Str(initial.into()),
+            ),
         );
         self
     }
@@ -170,11 +176,7 @@ impl PvaServerBuilder {
     }
 
     /// Add a `waveform` record (array) with the given initial data.
-    pub fn waveform(
-        mut self,
-        name: impl Into<String>,
-        data: ScalarArrayValue,
-    ) -> Self {
+    pub fn waveform(mut self, name: impl Into<String>, data: ScalarArrayValue) -> Self {
         let name = name.into();
         let ftvl = data.type_label().trim_end_matches("[]").to_string();
         let nelm = data.len();
@@ -237,17 +239,11 @@ impl PvaServerBuilder {
     }
 
     /// Register a periodic scan callback that produces a new value for a PV.
-    pub fn scan<F>(
-        mut self,
-        name: impl Into<String>,
-        period: Duration,
-        callback: F,
-    ) -> Self
+    pub fn scan<F>(mut self, name: impl Into<String>, period: Duration, callback: F) -> Self
     where
         F: Fn(&str) -> ScalarValue + Send + Sync + 'static,
     {
-        self.scans
-            .push((name.into(), period, Arc::new(callback)));
+        self.scans.push((name.into(), period, Arc::new(callback)));
         self
     }
 
@@ -265,12 +261,7 @@ impl PvaServerBuilder {
     ///     ScalarValue::F64(a + b)
     /// })
     /// ```
-    pub fn link<F>(
-        mut self,
-        output: impl Into<String>,
-        inputs: &[&str],
-        compute: F,
-    ) -> Self
+    pub fn link<F>(mut self, output: impl Into<String>, inputs: &[&str], compute: F) -> Self
     where
         F: Fn(&[ScalarValue]) -> ScalarValue + Send + Sync + 'static,
     {
@@ -353,19 +344,21 @@ impl PvaServerBuilder {
             self.compute_alarms,
         ));
 
-        let mut config = PvaServerConfig::default();
-        config.tcp_port = self.tcp_port;
-        config.udp_port = self.udp_port;
-        config.compute_alarms = self.compute_alarms;
-        if let Some(ip) = self.listen_ip {
-            config.listen_ip = ip;
-        }
-        config.advertise_ip = self.advertise_ip;
-        config.beacon_period_secs = self.beacon_period_secs;
-        config.conn_timeout = self.conn_timeout;
-        config.pvlist_mode = self.pvlist_mode;
-        config.pvlist_max = self.pvlist_max;
-        config.pvlist_allow_pattern = self.pvlist_allow_pattern;
+        let config = PvaServerConfig {
+            tcp_port: self.tcp_port,
+            udp_port: self.udp_port,
+            compute_alarms: self.compute_alarms,
+            listen_ip: self
+                .listen_ip
+                .unwrap_or(PvaServerConfig::default().listen_ip),
+            advertise_ip: self.advertise_ip,
+            beacon_period_secs: self.beacon_period_secs,
+            conn_timeout: self.conn_timeout,
+            pvlist_mode: self.pvlist_mode,
+            pvlist_max: self.pvlist_max,
+            pvlist_allow_pattern: self.pvlist_allow_pattern,
+            ..PvaServerConfig::default()
+        };
 
         PvaServer {
             store,
@@ -449,11 +442,7 @@ impl PvaServer {
 
 // ─── Record construction helpers ─────────────────────────────────────────
 
-fn make_scalar_record(
-    name: &str,
-    record_type: RecordType,
-    value: ScalarValue,
-) -> RecordInstance {
+fn make_scalar_record(name: &str, record_type: RecordType, value: ScalarValue) -> RecordInstance {
     let nt = NtScalar::from_value(value);
     let data = match record_type {
         RecordType::Ai => RecordData::Ai {
@@ -490,11 +479,7 @@ fn make_scalar_record(
     }
 }
 
-fn make_output_record(
-    name: &str,
-    record_type: RecordType,
-    value: ScalarValue,
-) -> RecordInstance {
+fn make_output_record(name: &str, record_type: RecordType, value: ScalarValue) -> RecordInstance {
     let nt = NtScalar::from_value(value);
     let data = match record_type {
         RecordType::Ao => RecordData::Ao {
@@ -596,9 +581,7 @@ mod tests {
     #[test]
     fn builder_waveform() {
         let data = ScalarArrayValue::F64(vec![1.0, 2.0, 3.0]);
-        let server = PvaServer::builder()
-            .waveform("T:WF", data)
-            .build();
+        let server = PvaServer::builder().waveform("T:WF", data).build();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -635,24 +618,16 @@ mod tests {
 
     #[test]
     fn store_runtime_get_set() {
-        let server = PvaServer::builder()
-            .ao("RT:V", 0.0)
-            .build();
+        let server = PvaServer::builder().ao("RT:V", 0.0).build();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
         let store = server.store().clone();
         rt.block_on(async {
-            assert_eq!(
-                store.get_value("RT:V").await,
-                Some(ScalarValue::F64(0.0))
-            );
+            assert_eq!(store.get_value("RT:V").await, Some(ScalarValue::F64(0.0)));
             store.set_value("RT:V", ScalarValue::F64(99.0)).await;
-            assert_eq!(
-                store.get_value("RT:V").await,
-                Some(ScalarValue::F64(99.0))
-            );
+            assert_eq!(store.get_value("RT:V").await, Some(ScalarValue::F64(99.0)));
         });
     }
 
@@ -663,8 +638,14 @@ mod tests {
             .ao("INPUT:B", 2.0)
             .ai("CALC:SUM", 0.0)
             .link("CALC:SUM", &["INPUT:A", "INPUT:B"], |values| {
-                let a = match &values[0] { ScalarValue::F64(v) => *v, _ => 0.0 };
-                let b = match &values[1] { ScalarValue::F64(v) => *v, _ => 0.0 };
+                let a = match &values[0] {
+                    ScalarValue::F64(v) => *v,
+                    _ => 0.0,
+                };
+                let b = match &values[1] {
+                    ScalarValue::F64(v) => *v,
+                    _ => 0.0,
+                };
                 ScalarValue::F64(a + b)
             })
             .build();

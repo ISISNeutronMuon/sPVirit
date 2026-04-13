@@ -3,7 +3,7 @@ use tokio::runtime::Runtime;
 
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
 use spvirit_tools::spvirit_client::client::pvget;
-use spvirit_tools::spvirit_client::format::{format_output, OutputFormat, RenderOptions};
+use spvirit_tools::spvirit_client::format::{OutputFormat, RenderOptions, format_output};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut pv_name = String::new();
@@ -34,7 +34,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if json {
         render_opts.format = OutputFormat::Json;
     }
-    println!("{}", format_output(&result.pv_name, &result.value, &render_opts));
+    println!(
+        "{}",
+        format_output(&result.pv_name, &result.value, &render_opts)
+    );
 
     if raw {
         println!("raw_pva: {}", hex::encode(result.raw_pva));

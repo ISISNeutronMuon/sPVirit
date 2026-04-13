@@ -3,8 +3,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use super::harness::{
-    contains_any, env_enabled, run_command_success, tool_path_from_base,
-    LocalServerFixture, ProcessGuard,
+    LocalServerFixture, ProcessGuard, contains_any, env_enabled, run_command_success,
+    tool_path_from_base,
 };
 
 #[test]
@@ -132,8 +132,8 @@ record(ao, "{}") {{
         .envs(common_env.iter().map(|(key, value)| (key, value)))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut monitor = ProcessGuard::spawn(&mut monitor_cmd, "epics pvmonitor")
-        .expect("pvmonitor should spawn");
+    let mut monitor =
+        ProcessGuard::spawn(&mut monitor_cmd, "epics pvmonitor").expect("pvmonitor should spawn");
     std::thread::sleep(Duration::from_millis(250));
 
     let mut bump = Command::new(&pvput_bin);
@@ -150,10 +150,10 @@ record(ao, "{}") {{
         .child_mut()
         .stdout
         .take()
-        .and_then(|stdout| {
+        .map(|stdout| {
             let reader = std::io::BufReader::new(stdout);
-            let lines: Vec<String> = reader.lines().flatten().collect();
-            Some(lines.join("\n"))
+            let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
+            lines.join("\n")
         })
         .unwrap_or_default();
     assert!(

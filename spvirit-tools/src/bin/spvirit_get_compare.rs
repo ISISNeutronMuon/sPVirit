@@ -3,9 +3,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
-use spvirit_tools::spvirit_client::client::{encode_create_channel_request, encode_get_request};
 use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
 use spvirit_codec::spvirit_encode::{encode_header, encode_string_pva};
+use spvirit_tools::spvirit_client::client::{encode_create_channel_request, encode_get_request};
 
 #[derive(Debug)]
 struct Frame {
@@ -182,6 +182,7 @@ fn compare_bytes(label: &str, actual: &[u8], expected: &[u8]) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn encode_validation_for_compare(
     buffer_size: u32,
     introspection_registry_size: u16,
@@ -233,8 +234,6 @@ fn encode_authnz_blob(user: &str, host: &str) -> Vec<u8> {
     out.extend_from_slice(host_bytes);
     out
 }
-
-
 
 fn parse_raw_dump(path: &str) -> Result<Vec<Frame>, Box<dyn std::error::Error>> {
     let mut f = File::open(path)?;

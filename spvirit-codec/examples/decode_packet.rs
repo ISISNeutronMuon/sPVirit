@@ -20,7 +20,14 @@ fn main() {
     println!("  version: {}", packet.header.version);
     println!("  command: {}", packet.header.command);
     println!("  payload: {} bytes", packet.header.payload_length);
-    println!("  endian:  {}", if packet.header.flags.is_msb { "big" } else { "little" });
+    println!(
+        "  endian:  {}",
+        if packet.header.flags.is_msb {
+            "big"
+        } else {
+            "little"
+        }
+    );
 
     if let Some(cmd) = packet.decode_payload() {
         match cmd {

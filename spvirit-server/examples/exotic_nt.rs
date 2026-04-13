@@ -4,8 +4,8 @@ use spvirit_server::{
     DbCommonState, OutputMode, PvaServer, RecordData, RecordInstance, RecordType,
 };
 use spvirit_types::{
-    NdCodec, NdDimension, NtNdArray, NtPayload, NtScalar, NtTable, NtTableColumn,
-    ScalarArrayValue, ScalarValue,
+    NdCodec, NdDimension, NtNdArray, NtPayload, NtScalar, NtTable, NtTableColumn, ScalarArrayValue,
+    ScalarValue,
 };
 
 #[tokio::main]
@@ -35,7 +35,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Acquire".to_string(),
                 "Calibrate".to_string(),
             ];
-            mode_nt.display_description = format!("Mode={}", mode_nt.display_form_choices[mode_idx as usize]);
+            mode_nt.display_description =
+                format!("Mode={}", mode_nt.display_form_choices[mode_idx as usize]);
             store.put_nt("SIM:MODE", NtPayload::Scalar(mode_nt)).await;
 
             // NTTable with two columns that change over time.
@@ -64,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // NTNDArray with a tiny 4x4 image.
             let pixels = (0..16)
-                .map(|i| (((i as i32 + tick as i32) % 16) * 16) as u8)
+                .map(|i| (((i + tick as i32) % 16) * 16) as u8)
                 .collect::<Vec<_>>();
             let ndarray_nt = NtNdArray {
                 value: ScalarArrayValue::U8(pixels),
@@ -98,7 +99,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 time_stamp: None,
                 display: None,
             };
-            store.put_nt("SIM:IMG", NtPayload::NdArray(ndarray_nt)).await;
+            store
+                .put_nt("SIM:IMG", NtPayload::NdArray(ndarray_nt))
+                .await;
 
             if let Some(snapshot) = store.get_nt("SIM:MODE").await {
                 println!("SIM:MODE => {snapshot:?}");

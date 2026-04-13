@@ -1,5 +1,5 @@
-use std::ops::ControlFlow;
 use spvirit_client::PvaClient;
+use std::ops::ControlFlow;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -8,9 +8,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| "MY:PV:NAME".into());
 
     let client = PvaClient::builder().build();
-    client.pvmonitor(&pv, |value| {
-        println!("{value}");
-        ControlFlow::Continue(())
-    }).await?;
+    client
+        .pvmonitor(&pv, |value| {
+            println!("{value}");
+            ControlFlow::Continue(())
+        })
+        .await?;
     Ok(())
 }

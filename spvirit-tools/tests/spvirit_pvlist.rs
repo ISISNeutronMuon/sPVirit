@@ -2,9 +2,9 @@ mod protocol;
 
 use std::time::Duration;
 
+use protocol::frame_harness::TestServer;
 use spvirit_codec::epics_decode::PvaPacketCommand;
 use spvirit_codec::spvirit_encode::encode_header;
-use protocol::frame_harness::TestServer;
 use tokio::net::UdpSocket;
 
 const PV_REQUEST_EMPTY: [u8; 6] = [0xfd, 0x02, 0x00, 0x80, 0x00, 0x00];

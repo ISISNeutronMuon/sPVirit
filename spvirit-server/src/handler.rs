@@ -4,8 +4,8 @@
 //! serve PVs over the EPICS PVAccess protocol.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use regex::Regex;
@@ -15,20 +15,19 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use spvirit_codec::epics_decode::{PvaHeader, PvaPacket, PvaPacketCommand};
-use spvirit_codec::spvirit_encode::{
-    encode_connection_validation, encode_control_message,
-    encode_create_channel_error, encode_create_channel_response, encode_get_field_error,
-    encode_get_field_response, encode_header, encode_message_error,
-    encode_monitor_data_response_payload, encode_op_error, encode_op_get_data_response_payload,
-    encode_op_init_response_desc, encode_op_put_get_data_error_response,
-    encode_op_put_get_data_response_payload, encode_op_put_get_init_error_response,
-    encode_op_put_get_init_response, encode_op_put_getput_response_payload, encode_op_put_response,
-    encode_op_put_status_response, encode_op_rpc_data_response_payload,
-    encode_op_status_error_response, encode_op_status_response, encode_search_response,
-    ip_from_bytes, ip_to_bytes,
-};
-use spvirit_codec::spvd_decode::{extract_subfield_desc, StructureDesc};
+use spvirit_codec::spvd_decode::{StructureDesc, extract_subfield_desc};
 use spvirit_codec::spvd_encode::nt_payload_desc;
+use spvirit_codec::spvirit_encode::{
+    encode_connection_validation, encode_control_message, encode_create_channel_error,
+    encode_create_channel_response, encode_get_field_error, encode_get_field_response,
+    encode_header, encode_message_error, encode_monitor_data_response_payload, encode_op_error,
+    encode_op_get_data_response_payload, encode_op_init_response_desc,
+    encode_op_put_get_data_error_response, encode_op_put_get_data_response_payload,
+    encode_op_put_get_init_error_response, encode_op_put_get_init_response,
+    encode_op_put_getput_response_payload, encode_op_put_response, encode_op_put_status_response,
+    encode_op_rpc_data_response_payload, encode_op_status_error_response,
+    encode_op_status_response, encode_search_response, ip_from_bytes, ip_to_bytes,
+};
 
 use spvirit_types::{NtPayload, NtScalar, NtScalarArray, ScalarArrayValue, ScalarValue};
 
@@ -410,44 +409,41 @@ async fn handle_get_field_request<S: PvStore>(
                 .flatten()
         });
 
-    if let Some(sid) = sid {
-        if let Some(pv_name) = conn_state.sid_to_pv.get(&sid) {
-            if let Some(nt) = get_nt_snapshot(state, pv_name).await {
-                let full_desc = nt_payload_desc(&nt);
-                let sub = payload
-                    .field_name
-                    .as_deref()
-                    .filter(|s| !s.is_empty());
-                let desc = if let Some(field_path) = sub {
-                    match extract_subfield_desc(&full_desc, field_path) {
-                        Some(sub_desc) => sub_desc,
-                        None => {
-                            let resp = encode_get_field_error(
-                                request_id,
-                                &format!("sub-field '{}' not found", field_path),
-                                version,
-                                is_be,
-                            );
-                            state.registry.send_msg(conn_id, resp).await;
-                            return;
-                        }
+    if let Some(sid) = sid
+        && let Some(pv_name) = conn_state.sid_to_pv.get(&sid)
+    {
+        if let Some(nt) = get_nt_snapshot(state, pv_name).await {
+            let full_desc = nt_payload_desc(&nt);
+            let sub = payload.field_name.as_deref().filter(|s| !s.is_empty());
+            let desc = if let Some(field_path) = sub {
+                match extract_subfield_desc(&full_desc, field_path) {
+                    Some(sub_desc) => sub_desc,
+                    None => {
+                        let resp = encode_get_field_error(
+                            request_id,
+                            &format!("sub-field '{}' not found", field_path),
+                            version,
+                            is_be,
+                        );
+                        state.registry.send_msg(conn_id, resp).await;
+                        return;
                     }
-                } else {
-                    full_desc
-                };
-                let resp = encode_get_field_response(request_id, &desc, version, is_be);
-                dump_hex_packet(conn_id, "tx", "cmd=17 get_field", version, is_be, &resp);
-                state.registry.send_msg(conn_id, resp).await;
-                debug!(
-                    "Conn {}: get_field cid={} sid={:?} ioid={:?} resolved_sid={} pv='{}' field={:?}",
-                    conn_id, payload.cid, payload.sid, payload.ioid, sid, pv_name, payload.field_name
-                );
-                return;
-            }
-            let resp = encode_get_field_error(request_id, "PV not found", version, is_be);
+                }
+            } else {
+                full_desc
+            };
+            let resp = encode_get_field_response(request_id, &desc, version, is_be);
+            dump_hex_packet(conn_id, "tx", "cmd=17 get_field", version, is_be, &resp);
             state.registry.send_msg(conn_id, resp).await;
+            debug!(
+                "Conn {}: get_field cid={} sid={:?} ioid={:?} resolved_sid={} pv='{}' field={:?}",
+                conn_id, payload.cid, payload.sid, payload.ioid, sid, pv_name, payload.field_name
+            );
             return;
         }
+        let resp = encode_get_field_error(request_id, "PV not found", version, is_be);
+        state.registry.send_msg(conn_id, resp).await;
+        return;
     }
 
     if state.pvlist_mode != PvListMode::List {
@@ -483,12 +479,8 @@ async fn handle_get_field_request<S: PvStore>(
         names.retain(|name| wildcard_match(pattern, name));
     }
     if names.is_empty() {
-        let resp = encode_get_field_error(
-            request_id,
-            "No PVs matched list request",
-            version,
-            is_be,
-        );
+        let resp =
+            encode_get_field_error(request_id, "No PVs matched list request", version, is_be);
         state.registry.send_msg(conn_id, resp).await;
         return;
     }
@@ -610,102 +602,96 @@ pub async fn run_udp_search<S: PvStore>(
         };
         let version = pkt.header.version;
         let is_be = pkt.header.flags.is_msb;
-        match cmd {
-            PvaPacketCommand::Search(payload) => {
-                debug!(
-                    "UDP search from {}: pv_count={} mask=0x{:02x}",
-                    peer,
-                    payload.pv_requests.len(),
-                    payload.mask
-                );
-                let accepts_tcp = payload.protocols.is_empty()
-                    || payload
-                        .protocols
-                        .iter()
-                        .any(|p| p.eq_ignore_ascii_case("tcp"));
-                if !accepts_tcp {
-                    debug!("UDP search: no compatible protocol (tcp not accepted)");
-                    continue;
-                }
-                let all_names = state.store.list_pvs().await;
-                let visible_names = collect_visible_pv_names(
-                    &all_names,
-                    state.pvlist_mode,
-                    state.pvlist_allow_pattern.as_ref(),
-                    state.pvlist_max,
-                );
-                let mut cids = Vec::new();
-                for (cid, name) in &payload.pv_requests {
-                    if state.store.has_pv(name).await
-                        || is_virtual_event_pv(name)
-                        || (is_pvlist_virtual_pv(name)
-                            && state.pvlist_mode == PvListMode::List)
-                        || (is_server_rpc_pv(name) && state.pvlist_mode != PvListMode::Off)
-                    {
-                        cids.push(*cid);
-                        continue;
-                    }
-                    if state.pvlist_mode != PvListMode::Off
-                        && is_pattern_query(name)
-                        && visible_names.iter().any(|pv| wildcard_match(name, pv))
-                    {
-                        cids.push(*cid);
-                    }
-                }
-                let response_required = (payload.mask & 0x01) != 0;
-                let server_discovery_ping = payload.pv_requests.is_empty();
-                let found = server_discovery_ping || !cids.is_empty();
-                if !found && !response_required {
-                    debug!("UDP search: no matches and response not required");
-                    continue;
-                }
-                let resp_ip = if let Some(ip) = advertise_ip {
-                    ip
-                } else if !addr.ip().is_unspecified() {
-                    addr.ip()
-                } else if let Some(ip) = infer_udp_response_ip(peer) {
-                    debug!("UDP search: inferred response address {}", ip);
-                    ip
-                } else {
-                    IpAddr::V4(Ipv4Addr::UNSPECIFIED)
-                };
-                let addr_bytes = if resp_ip.is_unspecified() {
-                    debug!(
-                        "UDP search: responding with zero address (unspecified listen)"
-                    );
-                    [0u8; 16]
-                } else {
-                    ip_to_bytes(resp_ip)
-                };
-                let response = encode_search_response(
-                    guid,
-                    payload.seq,
-                    addr_bytes,
-                    tcp_port,
-                    "tcp",
-                    found,
-                    &cids,
-                    version,
-                    is_be,
-                );
-                let reply_target = search_reply_target(&payload.addr, payload.port, peer);
-                if let Err(e) = socket.send_to(&response, reply_target).await {
-                    debug!(
-                        "UDP search: failed sending {} matches to {}: {}",
-                        cids.len(),
-                        reply_target,
-                        e
-                    );
-                    continue;
-                }
-                debug!(
-                    "UDP search: responded found={} with {} matches to {}",
-                    found,
-                    cids.len(),
-                    reply_target
-                );
+        if let PvaPacketCommand::Search(payload) = cmd {
+            debug!(
+                "UDP search from {}: pv_count={} mask=0x{:02x}",
+                peer,
+                payload.pv_requests.len(),
+                payload.mask
+            );
+            let accepts_tcp = payload.protocols.is_empty()
+                || payload
+                    .protocols
+                    .iter()
+                    .any(|p| p.eq_ignore_ascii_case("tcp"));
+            if !accepts_tcp {
+                debug!("UDP search: no compatible protocol (tcp not accepted)");
+                continue;
             }
-            _ => {}
+            let all_names = state.store.list_pvs().await;
+            let visible_names = collect_visible_pv_names(
+                &all_names,
+                state.pvlist_mode,
+                state.pvlist_allow_pattern.as_ref(),
+                state.pvlist_max,
+            );
+            let mut cids = Vec::new();
+            for (cid, name) in &payload.pv_requests {
+                if state.store.has_pv(name).await
+                    || is_virtual_event_pv(name)
+                    || (is_pvlist_virtual_pv(name) && state.pvlist_mode == PvListMode::List)
+                    || (is_server_rpc_pv(name) && state.pvlist_mode != PvListMode::Off)
+                {
+                    cids.push(*cid);
+                    continue;
+                }
+                if state.pvlist_mode != PvListMode::Off
+                    && is_pattern_query(name)
+                    && visible_names.iter().any(|pv| wildcard_match(name, pv))
+                {
+                    cids.push(*cid);
+                }
+            }
+            let response_required = (payload.mask & 0x01) != 0;
+            let server_discovery_ping = payload.pv_requests.is_empty();
+            let found = server_discovery_ping || !cids.is_empty();
+            if !found && !response_required {
+                debug!("UDP search: no matches and response not required");
+                continue;
+            }
+            let resp_ip = if let Some(ip) = advertise_ip {
+                ip
+            } else if !addr.ip().is_unspecified() {
+                addr.ip()
+            } else if let Some(ip) = infer_udp_response_ip(peer) {
+                debug!("UDP search: inferred response address {}", ip);
+                ip
+            } else {
+                IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+            };
+            let addr_bytes = if resp_ip.is_unspecified() {
+                debug!("UDP search: responding with zero address (unspecified listen)");
+                [0u8; 16]
+            } else {
+                ip_to_bytes(resp_ip)
+            };
+            let response = encode_search_response(
+                guid,
+                payload.seq,
+                addr_bytes,
+                tcp_port,
+                "tcp",
+                found,
+                &cids,
+                version,
+                is_be,
+            );
+            let reply_target = search_reply_target(&payload.addr, payload.port, peer);
+            if let Err(e) = socket.send_to(&response, reply_target).await {
+                debug!(
+                    "UDP search: failed sending {} matches to {}: {}",
+                    cids.len(),
+                    reply_target,
+                    e
+                );
+                continue;
+            }
+            debug!(
+                "UDP search: responded found={} with {} matches to {}",
+                found,
+                cids.len(),
+                reply_target
+            );
         }
     }
 }
@@ -926,12 +912,11 @@ pub async fn handle_connection<S: PvStore>(
         // Connection Validation (cmd=1): respond with CONNECTION_VALIDATED (cmd=9).
         if cmd_code == 1 {
             dump_hex_packet(conn_id, "rx", "cmd=1 validation", version, is_be, &full);
-            let validation =
-                spvirit_codec::epics_decode::PvaConnectionValidationPayload::new(
-                    payload_slice,
-                    is_be,
-                    false,
-                );
+            let validation = spvirit_codec::epics_decode::PvaConnectionValidationPayload::new(
+                payload_slice,
+                is_be,
+                false,
+            );
             if let Some(val) = validation {
                 debug!(
                     "Conn {}: validation request (cmd=1) ver={} be={} buf={} qos={} authz={:?}",
@@ -961,8 +946,7 @@ pub async fn handle_connection<S: PvStore>(
             PvaPacketCommand::Control(payload) => {
                 debug!("Conn {}: control {}", conn_id, payload);
                 if payload.command == 3 {
-                    let resp =
-                        encode_control_message(true, is_be, version, 4, payload.data);
+                    let resp = encode_control_message(true, is_be, version, 4, payload.data);
                     state.registry.send_msg(conn_id, resp).await;
                 }
                 continue;
@@ -984,16 +968,14 @@ pub async fn handle_connection<S: PvStore>(
                         let sid = state.sid_counter.fetch_add(1, Ordering::SeqCst);
                         conn_state.cid_to_sid.insert(cid, sid);
                         conn_state.sid_to_pv.insert(sid, pv_name.clone());
-                        let resp =
-                            encode_create_channel_response(cid, sid, version, is_be);
+                        let resp = encode_create_channel_response(cid, sid, version, is_be);
                         state.registry.send_msg(conn_id, resp).await;
                         info!(
                             "Conn {}: channel '{}' cid={} sid={}",
                             conn_id, pv_name, cid, sid
                         );
                     } else {
-                        let resp =
-                            encode_create_channel_error(cid, "PV not found", version, is_be);
+                        let resp = encode_create_channel_error(cid, "PV not found", version, is_be);
                         state.registry.send_msg(conn_id, resp).await;
                         info!(
                             "Conn {}: channel '{}' not found (cid={})",
@@ -1070,19 +1052,12 @@ pub async fn handle_connection<S: PvStore>(
                                 is_be,
                             );
                             state.registry.send_msg(conn_id, resp).await;
-                            info!(
-                                "Conn {}: get init pv='{}' ioid={}",
-                                conn_id, pv_name, ioid
-                            );
+                            info!("Conn {}: get init pv='{}' ioid={}", conn_id, pv_name, ioid);
                         } else {
-                            let resp = encode_op_get_data_response_payload(
-                                ioid, &nt, version, is_be,
-                            );
+                            let resp =
+                                encode_op_get_data_response_payload(ioid, &nt, version, is_be);
                             state.registry.send_msg(conn_id, resp).await;
-                            debug!(
-                                "Conn {}: get data pv='{}' ioid={}",
-                                conn_id, pv_name, ioid
-                            );
+                            debug!("Conn {}: get data pv='{}' ioid={}", conn_id, pv_name, ioid);
                         }
                     }
                     11 => {
@@ -1130,10 +1105,7 @@ pub async fn handle_connection<S: PvStore>(
                                 is_be,
                             );
                             state.registry.send_msg(conn_id, resp).await;
-                            info!(
-                                "Conn {}: put init pv='{}' ioid={}",
-                                conn_id, pv_name, ioid
-                            );
+                            info!("Conn {}: put init pv='{}' ioid={}", conn_id, pv_name, ioid);
                         } else {
                             if (payload.subcmd & 0x40) != 0 {
                                 if !is_virtual_event_pv(&pv_name)
@@ -1149,9 +1121,7 @@ pub async fn handle_connection<S: PvStore>(
                                     state.registry.send_msg(conn_id, resp).await;
                                     continue;
                                 }
-                                if let Some(nt) =
-                                    get_nt_snapshot(&state, &pv_name).await
-                                {
+                                if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
                                     let resp = encode_op_put_getput_response_payload(
                                         ioid, &nt, version, is_be,
                                     );
@@ -1206,7 +1176,11 @@ pub async fn handle_connection<S: PvStore>(
                                     }
                                     Err(msg) => {
                                         let resp = encode_op_put_status_response(
-                                            ioid, payload.subcmd, &msg, version, is_be,
+                                            ioid,
+                                            payload.subcmd,
+                                            &msg,
+                                            version,
+                                            is_be,
                                         );
                                         state.registry.send_msg(conn_id, resp).await;
                                         continue;
@@ -1220,17 +1194,18 @@ pub async fn handle_connection<S: PvStore>(
                                     payload.body.len()
                                 );
                                 let resp = encode_op_put_status_response(
-                                    ioid, payload.subcmd, "cannot decode PUT body", version, is_be,
+                                    ioid,
+                                    payload.subcmd,
+                                    "cannot decode PUT body",
+                                    version,
+                                    is_be,
                                 );
                                 state.registry.send_msg(conn_id, resp).await;
                                 continue;
                             }
                             let resp = encode_op_put_response(ioid, payload.subcmd, version, is_be);
                             state.registry.send_msg(conn_id, resp).await;
-                            debug!(
-                                "Conn {}: put data pv='{}' ioid={}",
-                                conn_id, pv_name, ioid
-                            );
+                            debug!("Conn {}: put data pv='{}' ioid={}", conn_id, pv_name, ioid);
                         }
                     }
                     12 => {
@@ -1268,9 +1243,8 @@ pub async fn handle_connection<S: PvStore>(
                             let desc = nt_payload_desc(&nt);
                             conn_state.ioid_to_desc.insert(ioid, desc.clone());
                             conn_state.ioid_to_pv.insert(ioid, pv_name.clone());
-                            let resp = encode_op_put_get_init_response(
-                                ioid, &desc, &desc, version, is_be,
-                            );
+                            let resp =
+                                encode_op_put_get_init_response(ioid, &desc, &desc, version, is_be);
                             state.registry.send_msg(conn_id, resp).await;
                             info!(
                                 "Conn {}: put_get init pv='{}' ioid={}",
@@ -1319,7 +1293,10 @@ pub async fn handle_connection<S: PvStore>(
                                     payload.body.len()
                                 );
                                 let resp = encode_op_put_get_data_error_response(
-                                    ioid, "cannot decode PUT body", version, is_be,
+                                    ioid,
+                                    "cannot decode PUT body",
+                                    version,
+                                    is_be,
                                 );
                                 state.registry.send_msg(conn_id, resp).await;
                                 continue;
@@ -1446,9 +1423,7 @@ pub async fn handle_connection<S: PvStore>(
                             conn_state.ioid_to_pv.remove(&ioid);
                             conn_state.ioid_to_desc.remove(&ioid);
                             info!("Conn {}: monitor end ioid={}", conn_id, ioid);
-                        } else if (payload.subcmd & 0x04) != 0
-                            || (payload.subcmd & 0x80) != 0
-                        {
+                        } else if (payload.subcmd & 0x04) != 0 || (payload.subcmd & 0x80) != 0 {
                             // Monitor start/stop/pipeline-ack
                             let start = (payload.subcmd & 0x44) == 0x44;
                             let stop = (payload.subcmd & 0x44) == 0x04;
@@ -1521,15 +1496,11 @@ pub async fn handle_connection<S: PvStore>(
                                 pipeline_ack,
                                 nfree
                             );
-                            if start {
-                                if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
-                                    state
-                                        .registry
-                                        .send_monitor_update_for(
-                                            &pv_name, conn_id, ioid, &nt,
-                                        )
-                                        .await;
-                                }
+                            if start && let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
+                                state
+                                    .registry
+                                    .send_monitor_update_for(&pv_name, conn_id, ioid, &nt)
+                                    .await;
                             }
                         }
                     }
@@ -1619,8 +1590,7 @@ pub async fn handle_connection<S: PvStore>(
                 }
             }
             PvaPacketCommand::AuthNZ(_) => {
-                let resp =
-                    encode_message_error("AUTHNZ command is not supported", version, is_be);
+                let resp = encode_message_error("AUTHNZ command is not supported", version, is_be);
                 state.registry.send_msg(conn_id, resp).await;
             }
             PvaPacketCommand::AclChange(_) => {
@@ -1629,65 +1599,39 @@ pub async fn handle_connection<S: PvStore>(
                 state.registry.send_msg(conn_id, resp).await;
             }
             PvaPacketCommand::GetField(payload) => {
-                handle_get_field_request(
-                    &state,
-                    &conn_state,
-                    conn_id,
-                    payload,
-                    version,
-                    is_be,
-                )
-                .await;
+                handle_get_field_request(&state, &conn_state, conn_id, payload, version, is_be)
+                    .await;
             }
             PvaPacketCommand::Echo(payload_bytes) => {
-                let mut resp = encode_header(
-                    true,
-                    is_be,
-                    false,
-                    version,
-                    2,
-                    payload_bytes.len() as u32,
-                );
+                let mut resp =
+                    encode_header(true, is_be, false, version, 2, payload_bytes.len() as u32);
                 resp.extend_from_slice(&payload_bytes);
                 state.registry.send_msg(conn_id, resp).await;
             }
             PvaPacketCommand::Message(_) => {
-                let resp =
-                    encode_message_error("MESSAGE command is not supported", version, is_be);
+                let resp = encode_message_error("MESSAGE command is not supported", version, is_be);
                 state.registry.send_msg(conn_id, resp).await;
             }
             PvaPacketCommand::MultipleData(_) => {
-                let resp = encode_message_error(
-                    "MULTIPLE_DATA command is not supported",
-                    version,
-                    is_be,
-                );
+                let resp =
+                    encode_message_error("MULTIPLE_DATA command is not supported", version, is_be);
                 state.registry.send_msg(conn_id, resp).await;
             }
             PvaPacketCommand::CancelRequest(_) => {
-                let resp = encode_message_error(
-                    "CANCEL_REQUEST command is not supported",
-                    version,
-                    is_be,
-                );
+                let resp =
+                    encode_message_error("CANCEL_REQUEST command is not supported", version, is_be);
                 state.registry.send_msg(conn_id, resp).await;
             }
             PvaPacketCommand::OriginTag(_) => {
-                let resp = encode_message_error(
-                    "ORIGIN_TAG command is not supported",
-                    version,
-                    is_be,
-                );
+                let resp =
+                    encode_message_error("ORIGIN_TAG command is not supported", version, is_be);
                 state.registry.send_msg(conn_id, resp).await;
             }
             PvaPacketCommand::Search(_)
             | PvaPacketCommand::SearchResponse(_)
             | PvaPacketCommand::Beacon(_) => {
-                let resp = encode_message_error(
-                    "Unexpected command for server endpoint",
-                    version,
-                    is_be,
-                );
+                let resp =
+                    encode_message_error("Unexpected command for server endpoint", version, is_be);
                 state.registry.send_msg(conn_id, resp).await;
             }
             PvaPacketCommand::Unknown(payload) => {

@@ -8,16 +8,16 @@ use tokio::runtime::Runtime;
 use tokio::time::interval;
 
 use spvirit_client::client_from_opts;
+use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
+use spvirit_codec::spvirit_encode::encode_control_message;
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
 use spvirit_tools::spvirit_client::client::{
-    encode_monitor_request, establish_channel, ChannelConn,
+    ChannelConn, encode_monitor_request, establish_channel,
 };
-use spvirit_tools::spvirit_client::format::{format_output, OutputFormat, RenderOptions};
+use spvirit_tools::spvirit_client::format::{OutputFormat, RenderOptions, format_output};
 use spvirit_tools::spvirit_client::search::resolve_pv_server;
 use spvirit_tools::spvirit_client::transport::{read_packet, read_until};
 use spvirit_tools::spvirit_client::types::{PvGetError, PvGetOptions};
-use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
-use spvirit_codec::spvirit_encode::encode_control_message;
 
 /// High-level monitor path (no raw hex output).
 async fn pvmonitor_high_level(opts: PvGetOptions, json: bool) -> Result<(), PvGetError> {
@@ -76,7 +76,7 @@ async fn pvmonitor_raw(opts: PvGetOptions, json: bool) -> Result<(), PvGetError>
         _ => {
             return Err(PvGetError::Protocol(
                 "unexpected monitor init response".to_string(),
-            ))
+            ));
         }
     };
 
@@ -104,26 +104,23 @@ async fn pvmonitor_raw(opts: PvGetOptions, json: bool) -> Result<(), PvGetError>
                     Some(c) => c,
                     None => continue,
                 };
-                match cmd {
-                    PvaPacketCommand::Op(mut op) => {
-                        if op.command != 13 || (op.subcmd != 0x00 && op.subcmd != 0x10) {
-                            continue;
-                        }
-                        op.decode_with_field_desc(&desc, is_be);
-                        if let Some(full) = op.decoded_value {
-                            let mut render_opts = RenderOptions::default();
-                            if json {
-                                render_opts.format = OutputFormat::Json;
-                            }
-                            println!("{}", format_output(&opts.pv_name, &full, &render_opts));
-                            println!("raw_pva: {}", hex_encode(&bytes));
-                            println!("raw_pvd: {}", hex_encode(&op.body));
-                        }
-                        if op.subcmd == 0x10 {
-                            return Ok(());
-                        }
+                if let PvaPacketCommand::Op(mut op) = cmd {
+                    if op.command != 13 || (op.subcmd != 0x00 && op.subcmd != 0x10) {
+                        continue;
                     }
-                    _ => {}
+                    op.decode_with_field_desc(&desc, is_be);
+                    if let Some(full) = op.decoded_value {
+                        let mut render_opts = RenderOptions::default();
+                        if json {
+                            render_opts.format = OutputFormat::Json;
+                        }
+                        println!("{}", format_output(&opts.pv_name, &full, &render_opts));
+                        println!("raw_pva: {}", hex_encode(&bytes));
+                        println!("raw_pvd: {}", hex_encode(&op.body));
+                    }
+                    if op.subcmd == 0x10 {
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -198,7 +195,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if had_error {
-            Err(PvGetError::Protocol("one or more monitors failed".to_string()))
+            Err(PvGetError::Protocol(
+                "one or more monitors failed".to_string(),
+            ))
         } else {
             Ok(())
         }
