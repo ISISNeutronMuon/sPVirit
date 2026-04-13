@@ -7,8 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::spvd_decode::{FieldDesc, FieldType, StructureDesc, TypeCode};
 
 use spvirit_types::{
-    NdDimension, NtAlarm, NtAttribute, NtDisplay, NtNdArray, NtPayload, NtScalar, NtScalarArray,
-    NtTable, NtTableColumn, NtTimeStamp, ScalarArrayValue, ScalarValue,
+    NdDimension, NtAlarm, NtAttribute, NtDisplay, NtField, NtNdArray, NtPayload, NtScalar,
+    NtScalarArray, NtStructure, NtTable, NtTableColumn, NtTimeStamp, ScalarArrayValue, ScalarValue,
 };
 
 fn count_structure_fields(desc: &StructureDesc) -> usize {
@@ -1105,6 +1105,11 @@ pub fn nt_payload_desc(payload: &NtPayload) -> StructureDesc {
         NtPayload::ScalarArray(nt) => nt_scalar_array_desc(&nt.value),
         NtPayload::Table(nt) => nt_table_desc(nt),
         NtPayload::NdArray(nt) => nt_ndarray_desc(nt),
+        NtPayload::Structure(nt) => nt_structure_desc(nt),
+        // `NtPayload` is `#[non_exhaustive]`. New variants must extend this
+        // dispatch with their own descriptor builder; until then, the
+        // empty descriptor is the only safe default we can emit.
+        _ => StructureDesc::new(),
     }
 }
 
@@ -1114,6 +1119,68 @@ pub fn encode_nt_payload_full(payload: &NtPayload, is_be: bool) -> Vec<u8> {
         NtPayload::ScalarArray(nt) => encode_nt_scalar_array_full(nt, is_be),
         NtPayload::Table(nt) => encode_nt_table_full(nt, is_be),
         NtPayload::NdArray(nt) => encode_nt_ndarray_full(nt, is_be),
+        NtPayload::Structure(nt) => encode_nt_structure_full(nt, is_be),
+        // `NtPayload` is `#[non_exhaustive]` — see `nt_payload_desc`.
+        _ => Vec::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Generic NtStructure — arbitrary nested structure (e.g. QSRV group PV)
+// ---------------------------------------------------------------------------
+
+/// Derive a [`StructureDesc`] from a generic [`NtStructure`] value.
+pub fn nt_structure_desc(nt: &NtStructure) -> StructureDesc {
+    StructureDesc {
+        struct_id: nt.struct_id.clone(),
+        fields: nt
+            .fields
+            .iter()
+            .map(|(name, value)| FieldDesc {
+                name: name.clone(),
+                field_type: nt_field_type(value),
+            })
+            .collect(),
+    }
+}
+
+fn nt_field_type(field: &NtField) -> FieldType {
+    match field {
+        NtField::Scalar(sv) => match sv {
+            ScalarValue::Bool(_) => FieldType::Scalar(TypeCode::Boolean),
+            ScalarValue::I8(_) => FieldType::Scalar(TypeCode::Int8),
+            ScalarValue::I16(_) => FieldType::Scalar(TypeCode::Int16),
+            ScalarValue::I32(_) => FieldType::Scalar(TypeCode::Int32),
+            ScalarValue::I64(_) => FieldType::Scalar(TypeCode::Int64),
+            ScalarValue::U8(_) => FieldType::Scalar(TypeCode::UInt8),
+            ScalarValue::U16(_) => FieldType::Scalar(TypeCode::UInt16),
+            ScalarValue::U32(_) => FieldType::Scalar(TypeCode::UInt32),
+            ScalarValue::U64(_) => FieldType::Scalar(TypeCode::UInt64),
+            ScalarValue::F32(_) => FieldType::Scalar(TypeCode::Float32),
+            ScalarValue::F64(_) => FieldType::Scalar(TypeCode::Float64),
+            ScalarValue::Str(_) => FieldType::String,
+        },
+        NtField::ScalarArray(sav) => scalar_array_field_type(sav),
+        NtField::Structure(nested) => FieldType::Structure(nt_structure_desc(nested)),
+    }
+}
+
+/// Encode the values of a generic [`NtStructure`] in field order, without any
+/// header or descriptor bytes. Used in the "full" encoding mode after the
+/// descriptor has been sent separately.
+pub fn encode_nt_structure_full(nt: &NtStructure, is_be: bool) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (_, field) in &nt.fields {
+        out.extend_from_slice(&encode_nt_field_full(field, is_be));
+    }
+    out
+}
+
+fn encode_nt_field_full(field: &NtField, is_be: bool) -> Vec<u8> {
+    match field {
+        NtField::Scalar(sv) => encode_scalar_value(sv, is_be),
+        NtField::ScalarArray(sav) => encode_scalar_array_value_pvd(sav, is_be),
+        NtField::Structure(nested) => encode_nt_structure_full(nested, is_be),
     }
 }
 
@@ -1305,5 +1372,160 @@ mod tests {
             .expect("data decode failed");
         assert!(consumed > 0, "consumed should be > 0");
         assert_eq!(consumed, data_bytes.len(), "consumed should match data_bytes.len()");
+    }
+
+    #[test]
+    fn nt_structure_desc_matches_fields() {
+        use spvirit_types::{NtField, NtStructure};
+        let mut inner = NtStructure::new("alarm_t");
+        inner.push("severity", NtField::Scalar(ScalarValue::I32(0)));
+        inner.push("message", NtField::Scalar(ScalarValue::Str(String::new())));
+
+        let mut group = NtStructure::new("example:group/1");
+        group.push("temperature", NtField::Scalar(ScalarValue::F64(21.5)));
+        group.push(
+            "readings",
+            NtField::ScalarArray(ScalarArrayValue::F64(vec![1.0, 2.0])),
+        );
+        group.push("alarm", NtField::Structure(inner));
+
+        let desc = nt_structure_desc(&group);
+        assert_eq!(desc.struct_id.as_deref(), Some("example:group/1"));
+        assert_eq!(desc.fields.len(), 3);
+
+        match &desc.fields[0].field_type {
+            FieldType::Scalar(TypeCode::Float64) => {}
+            other => panic!("temperature: expected Float64, got {other:?}"),
+        }
+        match &desc.fields[1].field_type {
+            FieldType::ScalarArray(TypeCode::Float64) => {}
+            other => panic!("readings: expected Float64 array, got {other:?}"),
+        }
+        match &desc.fields[2].field_type {
+            FieldType::Structure(nested) => {
+                assert_eq!(nested.struct_id.as_deref(), Some("alarm_t"));
+                assert_eq!(nested.fields.len(), 2);
+            }
+            other => panic!("alarm: expected Structure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nt_structure_encode_roundtrip() {
+        use spvirit_types::{NtField, NtStructure};
+        let mut group = NtStructure::new("test:group/1");
+        group.push("x", NtField::Scalar(ScalarValue::I32(7)));
+        group.push(
+            "xs",
+            NtField::ScalarArray(ScalarArrayValue::F64(vec![1.0, 2.0, 3.0])),
+        );
+        let mut nested = NtStructure::new("sub_t");
+        nested.push("y", NtField::Scalar(ScalarValue::Str("hi".into())));
+        group.push("child", NtField::Structure(nested));
+
+        let desc = nt_structure_desc(&group);
+        let desc_bytes = encode_structure_desc(&desc, false);
+        let data_bytes = encode_nt_structure_full(&group, false);
+
+        let mut pvd = Vec::new();
+        pvd.push(0x80);
+        pvd.extend_from_slice(&desc_bytes);
+        pvd.extend_from_slice(&data_bytes);
+
+        let decoder = PvdDecoder::new(false);
+        let parsed_desc = decoder.parse_introspection(&pvd).expect("desc parse");
+        let data_start = 1 + desc_bytes.len();
+        let (decoded, consumed) = decoder
+            .decode_structure(&pvd[data_start..], &parsed_desc)
+            .expect("value decode");
+        assert_eq!(consumed, data_bytes.len(), "consumed must match encoded length");
+
+        // Verify the decoded values actually match what we encoded.
+        let DecodedValue::Structure(fields) = decoded else {
+            panic!("expected DecodedValue::Structure, got {decoded:?}");
+        };
+        assert_eq!(fields.len(), 3, "expected 3 top-level fields");
+
+        // x: i32 = 7
+        assert_eq!(fields[0].0, "x");
+        match &fields[0].1 {
+            DecodedValue::Int32(v) => assert_eq!(*v, 7),
+            other => panic!("x: expected Int32, got {other:?}"),
+        }
+
+        // xs: f64[] = [1.0, 2.0, 3.0]
+        assert_eq!(fields[1].0, "xs");
+        match &fields[1].1 {
+            DecodedValue::Array(items) => {
+                assert_eq!(items.len(), 3);
+                for (i, expected) in [1.0, 2.0, 3.0].iter().enumerate() {
+                    match &items[i] {
+                        DecodedValue::Float64(v) => assert_eq!(*v, *expected),
+                        other => panic!("xs[{i}]: expected Float64, got {other:?}"),
+                    }
+                }
+            }
+            other => panic!("xs: expected Array, got {other:?}"),
+        }
+
+        // child: { y: "hi" }
+        assert_eq!(fields[2].0, "child");
+        match &fields[2].1 {
+            DecodedValue::Structure(inner) => {
+                assert_eq!(inner.len(), 1);
+                assert_eq!(inner[0].0, "y");
+                match &inner[0].1 {
+                    DecodedValue::String(s) => assert_eq!(s, "hi"),
+                    other => panic!("child.y: expected String, got {other:?}"),
+                }
+            }
+            other => panic!("child: expected Structure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nt_structure_empty_roundtrip() {
+        use spvirit_types::{NtPayload, NtStructure};
+        // Defensive corner: a totally empty structure must still produce
+        // a valid descriptor and zero bytes of value data.
+        let empty = NtStructure::anonymous();
+
+        let desc = nt_structure_desc(&empty);
+        assert_eq!(desc.fields.len(), 0);
+        assert!(desc.struct_id.is_none());
+
+        let data = encode_nt_structure_full(&empty, false);
+        assert!(data.is_empty(), "empty struct must encode to zero bytes");
+
+        // The wire round-trip should still succeed (descriptor only).
+        let payload = NtPayload::Structure(empty);
+        let _ = nt_payload_desc(&payload);
+        let _ = encode_nt_payload_full(&payload, false);
+    }
+
+    #[test]
+    fn nt_structure_big_endian_matches_little_endian_shape() {
+        use spvirit_types::{NtField, NtStructure};
+        let mut s = NtStructure::new("be_le_test/1");
+        s.push("x", NtField::Scalar(ScalarValue::I32(0x01020304)));
+
+        let le = encode_nt_structure_full(&s, false);
+        let be = encode_nt_structure_full(&s, true);
+
+        assert_eq!(le.len(), be.len(), "endianness must not change length");
+        // 0x01020304 in LE = 04 03 02 01; in BE = 01 02 03 04
+        assert_eq!(&le[..4], &[0x04, 0x03, 0x02, 0x01]);
+        assert_eq!(&be[..4], &[0x01, 0x02, 0x03, 0x04]);
+    }
+
+    #[test]
+    fn nt_payload_structure_desc_dispatch() {
+        use spvirit_types::{NtField, NtPayload, NtStructure};
+        let mut s = NtStructure::new("my:g/1");
+        s.push("v", NtField::Scalar(ScalarValue::I32(1)));
+        let payload = NtPayload::Structure(s);
+        let desc = nt_payload_desc(&payload);
+        assert_eq!(desc.struct_id.as_deref(), Some("my:g/1"));
+        assert_eq!(desc.fields.len(), 1);
     }
 }

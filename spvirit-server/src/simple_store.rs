@@ -12,7 +12,7 @@ use tracing::debug;
 use spvirit_codec::spvd_decode::{
     DecodedValue, FieldDesc, FieldType, StructureDesc, TypeCode,
 };
-use spvirit_types::{NtPayload, ScalarArrayValue, ScalarValue};
+use spvirit_types::{NtField, NtPayload, NtStructure, ScalarArrayValue, ScalarValue};
 
 use crate::apply::{
     apply_alarm_update, apply_control_update, apply_display_update, apply_scalar_array_put,
@@ -436,9 +436,122 @@ fn apply_put_to_record(
             // Table/NdArray PUT not supported via high-level API yet.
             debug!("PUT to NtTable/NtNdArray not yet supported in SimplePvStore");
         }
+        RecordData::NtStructure { nt } => {
+            // Generic structure PUT: replace the whole structure value
+            // when the inbound payload is itself a structure. Field-level
+            // partial updates would require a per-record schema and are
+            // out of scope for SimplePvStore — use a custom `PvStore` for
+            // that.
+            if let Some(next) = decoded_to_nt_structure(value) {
+                if next != *nt {
+                    *nt = next;
+                    changed = true;
+                }
+            } else {
+                debug!("PUT to NtStructure '{}' rejected: not a structure value", record.name);
+            }
+        }
     }
 
     changed
+}
+
+/// Best-effort conversion from a `DecodedValue` into an [`NtStructure`].
+///
+/// Mirrors the variants that [`encode_nt_structure_full`] can emit; anything
+/// outside that envelope (variant union, struct-array, etc) is dropped.
+fn decoded_to_nt_structure(value: &DecodedValue) -> Option<NtStructure> {
+    match value {
+        DecodedValue::Structure(fields) => {
+            let mut s = NtStructure::anonymous();
+            for (name, inner) in fields {
+                if let Some(field) = decoded_to_nt_field(inner) {
+                    s.push(name.clone(), field);
+                }
+            }
+            Some(s)
+        }
+        _ => None,
+    }
+}
+
+fn decoded_to_nt_field(value: &DecodedValue) -> Option<NtField> {
+    match value {
+        DecodedValue::Boolean(b) => Some(NtField::Scalar(ScalarValue::Bool(*b))),
+        DecodedValue::Int8(v) => Some(NtField::Scalar(ScalarValue::I8(*v))),
+        DecodedValue::Int16(v) => Some(NtField::Scalar(ScalarValue::I16(*v))),
+        DecodedValue::Int32(v) => Some(NtField::Scalar(ScalarValue::I32(*v))),
+        DecodedValue::Int64(v) => Some(NtField::Scalar(ScalarValue::I64(*v))),
+        DecodedValue::UInt8(v) => Some(NtField::Scalar(ScalarValue::U8(*v))),
+        DecodedValue::UInt16(v) => Some(NtField::Scalar(ScalarValue::U16(*v))),
+        DecodedValue::UInt32(v) => Some(NtField::Scalar(ScalarValue::U32(*v))),
+        DecodedValue::UInt64(v) => Some(NtField::Scalar(ScalarValue::U64(*v))),
+        DecodedValue::Float32(v) => Some(NtField::Scalar(ScalarValue::F32(*v))),
+        DecodedValue::Float64(v) => Some(NtField::Scalar(ScalarValue::F64(*v))),
+        DecodedValue::String(s) => Some(NtField::Scalar(ScalarValue::Str(s.clone()))),
+        DecodedValue::Array(items) => Some(NtField::ScalarArray(decoded_array_to_scalar_array(items))),
+        DecodedValue::Structure(_) => decoded_to_nt_structure(value).map(NtField::Structure),
+        DecodedValue::Null | DecodedValue::Raw(_) => None,
+    }
+}
+
+fn decoded_array_to_scalar_array(items: &[DecodedValue]) -> ScalarArrayValue {
+    macro_rules! collect_arm {
+        ($variant:ident, $ty:ty, $extract:expr) => {{
+            ScalarArrayValue::$variant(items.iter().filter_map($extract).collect::<Vec<$ty>>())
+        }};
+    }
+    match items.first() {
+        Some(DecodedValue::Boolean(_)) => collect_arm!(Bool, bool, |v| match v {
+            DecodedValue::Boolean(b) => Some(*b),
+            _ => None,
+        }),
+        Some(DecodedValue::Int8(_)) => collect_arm!(I8, i8, |v| match v {
+            DecodedValue::Int8(i) => Some(*i),
+            _ => None,
+        }),
+        Some(DecodedValue::Int16(_)) => collect_arm!(I16, i16, |v| match v {
+            DecodedValue::Int16(i) => Some(*i),
+            _ => None,
+        }),
+        Some(DecodedValue::Int32(_)) => collect_arm!(I32, i32, |v| match v {
+            DecodedValue::Int32(i) => Some(*i),
+            _ => None,
+        }),
+        Some(DecodedValue::Int64(_)) => collect_arm!(I64, i64, |v| match v {
+            DecodedValue::Int64(i) => Some(*i),
+            _ => None,
+        }),
+        Some(DecodedValue::UInt8(_)) => collect_arm!(U8, u8, |v| match v {
+            DecodedValue::UInt8(i) => Some(*i),
+            _ => None,
+        }),
+        Some(DecodedValue::UInt16(_)) => collect_arm!(U16, u16, |v| match v {
+            DecodedValue::UInt16(i) => Some(*i),
+            _ => None,
+        }),
+        Some(DecodedValue::UInt32(_)) => collect_arm!(U32, u32, |v| match v {
+            DecodedValue::UInt32(i) => Some(*i),
+            _ => None,
+        }),
+        Some(DecodedValue::UInt64(_)) => collect_arm!(U64, u64, |v| match v {
+            DecodedValue::UInt64(i) => Some(*i),
+            _ => None,
+        }),
+        Some(DecodedValue::Float32(_)) => collect_arm!(F32, f32, |v| match v {
+            DecodedValue::Float32(f) => Some(*f),
+            _ => None,
+        }),
+        Some(DecodedValue::Float64(_)) => collect_arm!(F64, f64, |v| match v {
+            DecodedValue::Float64(f) => Some(*f),
+            _ => None,
+        }),
+        Some(DecodedValue::String(_)) => collect_arm!(Str, String, |v| match v {
+            DecodedValue::String(s) => Some(s.clone()),
+            _ => None,
+        }),
+        Some(_) | None => ScalarArrayValue::F64(Vec::new()),
+    }
 }
 
 // ── NtPayload → StructureDesc ────────────────────────────────────────────
@@ -447,6 +560,13 @@ pub(crate) fn descriptor_for_payload(payload: &NtPayload) -> StructureDesc {
     match payload {
         NtPayload::Scalar(nt) => nt_scalar_desc(&nt.value),
         NtPayload::ScalarArray(arr) => nt_scalar_array_desc(&arr.value),
+        NtPayload::Structure(nt) => spvirit_codec::spvd_encode::nt_structure_desc(nt),
+        // `NtTable` and `NtNdArray` have richer descriptors that the
+        // server's wire path derives via `nt_payload_desc()`; this
+        // simpler local path returns an empty descriptor for them, which
+        // is acceptable for the SimplePvStore-only API surface (used in
+        // examples / tests, not the canonical wire encoder). New
+        // `#[non_exhaustive]` variants also fall through here.
         _ => StructureDesc::new(),
     }
 }

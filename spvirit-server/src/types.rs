@@ -22,6 +22,8 @@ pub enum RecordType {
     SubArray,
     NtTable,
     NtNdArray,
+    /// Generic nested structure (QSRV group PV / composite PV).
+    NtStructure,
 }
 
 impl RecordType {
@@ -200,6 +202,11 @@ pub enum RecordData {
         out: Option<LinkExpr>,
         omsl: OutputMode,
     },
+    /// Generic structure record — backs PVs whose payload is an
+    /// arbitrary nested structure (QSRV group PVs, ad-hoc composite
+    /// values). Has no input/output links of its own; updates flow
+    /// through [`SimplePvStore::put_nt`] or another higher-level path.
+    NtStructure { nt: NtStructure },
 }
 
 impl RecordData {
@@ -241,6 +248,7 @@ impl RecordData {
             | Self::SubArray { nt, .. } => NtPayload::ScalarArray(nt.clone()),
             Self::NtTable { nt, .. } => NtPayload::Table(nt.clone()),
             Self::NtNdArray { nt, .. } => NtPayload::NdArray(nt.clone()),
+            Self::NtStructure { nt } => NtPayload::Structure(nt.clone()),
         }
     }
 }
@@ -264,6 +272,7 @@ impl RecordInstance {
             RecordData::Waveform { .. } => true,
             RecordData::NtTable { .. } => true,
             RecordData::NtNdArray { .. } => true,
+            RecordData::NtStructure { .. } => true,
             _ => false,
         }
     }
@@ -290,9 +299,22 @@ impl RecordInstance {
                 scalar.display_description = "NDArray dimensions".to_string();
                 scalar
             }
+            NtPayload::Structure(nt) => {
+                let mut scalar = NtScalar::from_value(ScalarValue::I32(nt.fields.len() as i32));
+                scalar.display_description = "Structure fields".to_string();
+                scalar
+            }
+            // `NtPayload` is `#[non_exhaustive]`. Unknown variants degrade
+            // to a zero scalar with a descriptive message rather than
+            // panicking.
+            other => {
+                let mut scalar = NtScalar::from_value(ScalarValue::I32(0));
+                scalar.display_description = format!("unsupported variant: {other:?}");
+                scalar
+            }
         }
     }
-    // 
+    //
     pub fn nt_mut(&mut self) -> &mut NtScalar {
         self.data.nt_mut()
     }
@@ -303,6 +325,10 @@ impl RecordInstance {
             NtPayload::ScalarArray(nt) => ScalarValue::I32(nt.value.len() as i32),
             NtPayload::Table(nt) => ScalarValue::I32(nt.columns.len() as i32),
             NtPayload::NdArray(nt) => ScalarValue::I32(nt.dimension.len() as i32),
+            NtPayload::Structure(nt) => ScalarValue::I32(nt.fields.len() as i32),
+            // `NtPayload` is `#[non_exhaustive]` — unknown variants
+            // degrade to a sentinel zero rather than panicking.
+            _ => ScalarValue::I32(0),
         }
     }
 
@@ -569,6 +595,18 @@ impl RecordInstance {
                     true
                 }
             }
+            (RecordData::NtStructure { nt }, NtPayload::Structure(next)) => {
+                if *nt == next {
+                    false
+                } else {
+                    *nt = next;
+                    true
+                }
+            }
+            // Non-matching (variant, payload) pair, plus future
+            // `NtPayload` variants added in later versions (the type is
+            // `#[non_exhaustive]`). Both degrade to "no change" rather
+            // than panicking.
             _ => false,
         }
     }

@@ -92,6 +92,7 @@ flowchart TD
     NTP --> NTSA["NtScalarArray"]
     NTP --> NTT["NtTable"]
     NTP --> NTNA["NtNdArray"]
+    NTP --> NTSTR["NtStructure"]
 
     NTS --> V1["value: ScalarValue"]
     NTS --> A1["alarm severity/status/message"]
@@ -105,9 +106,11 @@ flowchart TD
 
     NTT --> L["labels + columns"]
     NTNA --> DIM["dimensions + codec + attributes"]
+    NTSTR --> ID["struct_id (optional)"]
+    NTSTR --> F["fields: Vec[(name, NtField)]"]
 ```
 
-The four Normative Types in Spvirit:
+The Normative Type variants exposed by Spvirit:
 
 | Normative Type | Rust Type | Backed by | Used for |
 |---|---|---|---|
@@ -115,6 +118,13 @@ The four Normative Types in Spvirit:
 | NTScalarArray | `NtScalarArray` | `ScalarArrayValue` (Vec\<f64\>, Vec\<i32\>, …) | Array PVs (`waveform`, `aai`, `aao`) |
 | NTTable | `NtTable` | Named columns of `ScalarArrayValue` | Tabular data |
 | NTNDArray | `NtNdArray` | `ScalarArrayValue` + dimensions + attributes | Image / detector data (areaDetector) |
+| Generic Structure | `NtStructure` | nested `Scalar` / `ScalarArray` / `Structure` fields | QSRV group PVs, ad-hoc composite PVs |
+
+> **Note** `NtPayload` is `#[non_exhaustive]` since 0.2.0 — `match` on it
+> must include a wildcard arm. The `Generic Structure` variant carries
+> arbitrary nested fields but **not** unions, struct-arrays, or variant
+> types; if you need those, extend `NtField` rather than working around
+> the limit at the call site.
 
 ### Enums in EPICS (bi/bo and ZNAM/ONAM)
 
@@ -195,11 +205,11 @@ spmonitor my:pv:name
 Add the crates you need to your `Cargo.toml`:
 ```toml
 [dependencies]
-spvirit-client = "0.1"   # client library: search, connect, get, put, monitor
-spvirit-server = "0.1"   # server library: db parsing, PvStore trait, PVA server
-spvirit-codec  = "0.1"   # low-level PVA protocol encode/decode
-spvirit-types  = "0.1"   # shared Normative Type data model
-spvirit-tools  = "0.1"   # all of the above + CLI tool helpers
+spvirit-client = "0.2"   # client library: search, connect, get, put, monitor
+spvirit-server = "0.2"   # server library: db parsing, PvStore trait, PVA server
+spvirit-codec  = "0.2"   # low-level PVA protocol encode/decode
+spvirit-types  = "0.2"   # shared Normative Type data model
+spvirit-tools  = "0.2"   # all of the above + CLI tool helpers
 ```
 
 #### Fetching a PV value (pvget)

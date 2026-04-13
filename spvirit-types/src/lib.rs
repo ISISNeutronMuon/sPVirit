@@ -456,12 +456,87 @@ impl NtNdArray {
     }
 }
 
+/// Top-level Normative Type payload returned by [`crate`] and consumed by
+/// the spvirit codec / server.
+///
+/// `#[non_exhaustive]` means callers must include a wildcard arm in
+/// `match` expressions; this lets new variants be added in future minor
+/// releases without breaking downstream code. Adding the [`NtPayload::Structure`]
+/// variant in 0.2.0 was already a breaking change for code that did not
+/// have a wildcard arm.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum NtPayload {
     Scalar(NtScalar),
     ScalarArray(NtScalarArray),
     Table(NtTable),
     NdArray(NtNdArray),
+    /// Generic nested structure — used for QSRV group PVs and other
+    /// payloads whose shape does not match a canonical Normative Type.
+    /// The contained [`NtStructure`] supports nested scalars, scalar
+    /// arrays, and nested structures (no unions, struct-arrays, or
+    /// variants — see [`NtStructure`] for details).
+    Structure(NtStructure),
+}
+
+/// A nested PV value built out of scalars, scalar arrays and (recursively)
+/// other [`NtStructure`]s. Used to express PV payloads that don't fit a
+/// canonical Normative Type variant — primarily QSRV group PVs.
+///
+/// **Expressiveness limits.** Each field is an [`NtField`], which today only
+/// carries `Scalar`, `ScalarArray`, or nested `Structure`. The richer
+/// pvData kinds — `union`, `union[]`, `structure[]`, `variant`,
+/// `variant[]`, `bounded_string` — are intentionally *not* supported.
+/// They are rare in PVA data (QSRV groups never produce them) and adding
+/// them would require codec, server-side put-routing, and PvStore changes
+/// that no current consumer asks for. If a use case appears, prefer
+/// extending [`NtField`] in a follow-up release rather than working
+/// around it on the call site.
+///
+/// `struct_id` is the PVA `structure ID` string sent on the wire (e.g.
+/// `"epics:nt/NTScalar:1.0"` for canonical NT shapes, an arbitrary
+/// label like `"my:group/v1"` for QSRV groups, or `None` for an
+/// anonymous nested structure).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct NtStructure {
+    pub struct_id: Option<String>,
+    pub fields: Vec<(String, NtField)>,
+}
+
+impl NtStructure {
+    pub fn new(struct_id: impl Into<String>) -> Self {
+        Self {
+            struct_id: Some(struct_id.into()),
+            fields: Vec::new(),
+        }
+    }
+
+    pub fn anonymous() -> Self {
+        Self {
+            struct_id: None,
+            fields: Vec::new(),
+        }
+    }
+
+    pub fn push(&mut self, name: impl Into<String>, value: NtField) {
+        self.fields.push((name.into(), value));
+    }
+
+    pub fn field(&self, name: &str) -> Option<&NtField> {
+        self.fields.iter().find(|(n, _)| n == name).map(|(_, v)| v)
+    }
+}
+
+/// One field inside a generic [`NtStructure`].
+///
+/// Limited to scalars, scalar arrays, and nested structures — see the
+/// expressiveness note on [`NtStructure`] for what is intentionally
+/// excluded.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NtField {
+    Scalar(ScalarValue),
+    ScalarArray(ScalarArrayValue),
+    Structure(NtStructure),
 }
 
 pub(crate) fn default_form_choices() -> Vec<String> {
@@ -474,4 +549,65 @@ pub(crate) fn default_form_choices() -> Vec<String> {
         "Exponential".to_string(),
         "Engineering".to_string(),
     ]
+}
+
+#[cfg(test)]
+mod nt_structure_tests {
+    use super::*;
+
+    #[test]
+    fn nt_structure_build_and_lookup() {
+        let mut nested = NtStructure::new("alarm_t");
+        nested.push("severity", NtField::Scalar(ScalarValue::I32(2)));
+        nested.push("message", NtField::Scalar(ScalarValue::Str("HIHI".into())));
+
+        let mut outer = NtStructure::new("my:group/v1");
+        outer.push("value", NtField::Scalar(ScalarValue::F64(1.5)));
+        outer.push("alarm", NtField::Structure(nested));
+
+        match outer.field("value") {
+            Some(NtField::Scalar(ScalarValue::F64(v))) => assert_eq!(*v, 1.5),
+            _ => panic!("expected scalar value"),
+        }
+        match outer.field("alarm") {
+            Some(NtField::Structure(s)) => {
+                assert_eq!(s.struct_id.as_deref(), Some("alarm_t"));
+                assert_eq!(s.fields.len(), 2);
+            }
+            _ => panic!("expected nested structure"),
+        }
+    }
+
+    #[test]
+    fn nt_payload_structure_variant() {
+        let mut s = NtStructure::new("test:group/1");
+        s.push("x", NtField::Scalar(ScalarValue::I32(42)));
+        let payload = NtPayload::Structure(s);
+        match payload {
+            NtPayload::Structure(s) => assert_eq!(s.fields.len(), 1),
+            _ => panic!("expected Structure variant"),
+        }
+    }
+
+    #[test]
+    fn nt_structure_anonymous_has_no_id() {
+        let s = NtStructure::anonymous();
+        assert!(s.struct_id.is_none());
+        assert!(s.fields.is_empty());
+    }
+
+    #[test]
+    fn nt_field_nested_arrays() {
+        let mut s = NtStructure::anonymous();
+        s.push(
+            "xs",
+            NtField::ScalarArray(ScalarArrayValue::F64(vec![1.0, 2.0, 3.0])),
+        );
+        match s.field("xs") {
+            Some(NtField::ScalarArray(ScalarArrayValue::F64(v))) => {
+                assert_eq!(v.len(), 3);
+            }
+            _ => panic!("expected array"),
+        }
+    }
 }

@@ -2487,6 +2487,10 @@ fn process_record_body(
                 }
             }
         }
+        RecordData::NtStructure { .. } => {
+            // Generic structure records have no input/output links of
+            // their own — updates flow through put_nt / put_value.
+        }
     }
 }
 
@@ -2757,6 +2761,11 @@ fn apply_put_update(
         | RecordData::SubArray { nt, nord, .. } => apply_scalar_array_put(nt, nord, value),
         RecordData::NtTable { nt, .. } => apply_table_put(nt, value),
         RecordData::NtNdArray { nt, .. } => apply_ndarray_put(nt, value),
+        RecordData::NtStructure { .. } => {
+            // The bundled spserver does not yet route generic structure
+            // PUTs (use a custom PvStore impl for that).
+            false
+        }
     }
 }
 

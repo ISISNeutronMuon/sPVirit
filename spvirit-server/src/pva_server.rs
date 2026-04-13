@@ -144,6 +144,31 @@ impl PvaServerBuilder {
         self
     }
 
+    /// Add a generic structure PV with the given initial value.
+    ///
+    /// Use this for QSRV group PVs and other composite PVs whose payload
+    /// does not fit a canonical Normative Type. The structure can carry
+    /// nested scalars, scalar arrays, and nested structures (see
+    /// [`spvirit_types::NtStructure`] for the exact envelope).
+    pub fn nt_structure(
+        mut self,
+        name: impl Into<String>,
+        initial: spvirit_types::NtStructure,
+    ) -> Self {
+        let name = name.into();
+        self.records.insert(
+            name.clone(),
+            RecordInstance {
+                name: name.clone(),
+                record_type: RecordType::NtStructure,
+                common: DbCommonState::default(),
+                data: RecordData::NtStructure { nt: initial },
+                raw_fields: HashMap::new(),
+            },
+        );
+        self
+    }
+
     /// Add a `waveform` record (array) with the given initial data.
     pub fn waveform(
         mut self,

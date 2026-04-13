@@ -54,5 +54,14 @@ fn print_snapshot(pv: &str, payload: &NtPayload) {
         NtPayload::NdArray(nt) => {
             println!("{pv} snapshot: ndarray dims={}", nt.dimension.len());
         }
+        NtPayload::Structure(nt) => {
+            println!(
+                "{pv} snapshot: structure id={:?} fields={}",
+                nt.struct_id,
+                nt.fields.len()
+            );
+        }
+        // `NtPayload` is `#[non_exhaustive]`.
+        other => println!("{pv} snapshot: unknown variant {other:?}"),
     }
 }
