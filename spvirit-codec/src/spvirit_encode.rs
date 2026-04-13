@@ -4,8 +4,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use spvirit_types::{NtPayload, NtScalar};
 use crate::spvd_decode::StructureDesc;
 use crate::spvd_encode::{
-    encode_nt_payload_bitset, encode_nt_payload_bitset_parts, encode_nt_payload_full,
-    encode_nt_scalar_bitset, encode_nt_scalar_full, encode_structure_desc,
+    encode_nt_payload_bitset, encode_nt_payload_bitset_parts, encode_nt_payload_filtered,
+    encode_nt_payload_full, encode_nt_scalar_bitset, encode_nt_scalar_full, encode_structure_desc,
     nt_payload_desc,
 };
 
@@ -24,6 +24,24 @@ fn encode_status_ok() -> Vec<u8> {
 fn encode_status_error(message: &str, is_be: bool) -> Vec<u8> {
     let mut out = Vec::new();
     out.push(0x02);
+    out.extend_from_slice(&encode_string_pva(message, is_be));
+    out.extend_from_slice(&encode_string_pva("", is_be));
+    out
+}
+
+/// Encode a WARNING status (type byte 0x01) with a message.
+pub fn encode_status_warning(message: &str, is_be: bool) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(0x01);
+    out.extend_from_slice(&encode_string_pva(message, is_be));
+    out.extend_from_slice(&encode_string_pva("", is_be));
+    out
+}
+
+/// Encode a FATAL status (type byte 0x03) with a message.
+pub fn encode_status_fatal(message: &str, is_be: bool) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(0x03);
     out.extend_from_slice(&encode_string_pva(message, is_be));
     out.extend_from_slice(&encode_string_pva("", is_be));
     out
@@ -540,6 +558,32 @@ pub fn encode_op_data_response_payload(
     out
 }
 
+/// Like [`encode_op_data_response_payload`] but encodes only the fields
+/// present in `filtered_desc` (as negotiated in the INIT response).
+pub fn encode_op_data_response_filtered(
+    command: u8,
+    ioid: u32,
+    payload_value: &NtPayload,
+    filtered_desc: &StructureDesc,
+    version: u8,
+    is_be: bool,
+) -> Vec<u8> {
+    let (bitset, values) = encode_nt_payload_filtered(payload_value, filtered_desc, is_be);
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&if is_be {
+        ioid.to_be_bytes()
+    } else {
+        ioid.to_le_bytes()
+    });
+    payload.push(0x00);
+    payload.extend_from_slice(&encode_status_ok());
+    payload.extend_from_slice(&bitset);
+    payload.extend_from_slice(&values);
+    let mut out = encode_header(true, is_be, false, version, command, payload.len() as u32);
+    out.extend_from_slice(&payload);
+    out
+}
+
 pub fn encode_op_status_response(
     command: u8,
     ioid: u32,
@@ -796,6 +840,35 @@ pub fn encode_monitor_data_response_payload(
     payload.extend_from_slice(&changed_bitset);
     payload.extend_from_slice(&values);
     // overrun bitset: empty (after data per spec)
+    payload.extend_from_slice(&encode_size_pva(0, is_be));
+    let mut out = encode_header(true, is_be, false, version, 13, payload.len() as u32);
+    out.extend_from_slice(&payload);
+    out
+}
+
+/// Like [`encode_monitor_data_response_payload`] but encodes only the fields
+/// present in `filtered_desc`.
+pub fn encode_monitor_data_response_filtered(
+    ioid: u32,
+    subcmd: u8,
+    payload_value: &NtPayload,
+    filtered_desc: &StructureDesc,
+    version: u8,
+    is_be: bool,
+) -> Vec<u8> {
+    let (bitset, values) = encode_nt_payload_filtered(payload_value, filtered_desc, is_be);
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&if is_be {
+        ioid.to_be_bytes()
+    } else {
+        ioid.to_le_bytes()
+    });
+    payload.push(subcmd);
+    if (subcmd & 0x10) != 0 {
+        payload.extend_from_slice(&encode_status_ok());
+    }
+    payload.extend_from_slice(&bitset);
+    payload.extend_from_slice(&values);
     payload.extend_from_slice(&encode_size_pva(0, is_be));
     let mut out = encode_header(true, is_be, false, version, 13, payload.len() as u32);
     out.extend_from_slice(&payload);

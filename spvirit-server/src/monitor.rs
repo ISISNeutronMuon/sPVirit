@@ -7,7 +7,9 @@ use std::collections::HashMap;
 use tokio::sync::{mpsc, Mutex};
 use tracing::debug;
 
-use spvirit_codec::spvirit_encode::encode_monitor_data_response_payload;
+use spvirit_codec::spvirit_encode::{
+    encode_monitor_data_response_filtered, encode_monitor_data_response_payload,
+};
 use spvirit_types::NtPayload;
 
 use crate::state::MonitorSub;
@@ -53,13 +55,15 @@ impl MonitorRegistry {
                     if sub.pipeline_enabled && sub.nfree > 0 {
                         sub.nfree -= 1;
                     }
-                    let msg = encode_monitor_data_response_payload(
-                        sub.ioid,
-                        subcmd,
-                        payload,
-                        sub.version,
-                        sub.is_be,
-                    );
+                    let msg = if let Some(ref desc) = sub.filtered_desc {
+                        encode_monitor_data_response_filtered(
+                            sub.ioid, subcmd, payload, desc, sub.version, sub.is_be,
+                        )
+                    } else {
+                        encode_monitor_data_response_payload(
+                            sub.ioid, subcmd, payload, sub.version, sub.is_be,
+                        )
+                    };
                     to_send.push((sub.conn_id, msg));
                 }
             }
@@ -97,13 +101,15 @@ impl MonitorRegistry {
                     if sub.pipeline_enabled && sub.nfree > 0 {
                         sub.nfree -= 1;
                     }
-                    let msg = encode_monitor_data_response_payload(
-                        sub.ioid,
-                        subcmd,
-                        payload,
-                        sub.version,
-                        sub.is_be,
-                    );
+                    let msg = if let Some(ref desc) = sub.filtered_desc {
+                        encode_monitor_data_response_filtered(
+                            sub.ioid, subcmd, payload, desc, sub.version, sub.is_be,
+                        )
+                    } else {
+                        encode_monitor_data_response_payload(
+                            sub.ioid, subcmd, payload, sub.version, sub.is_be,
+                        )
+                    };
                     to_send = Some((sub.conn_id, msg));
                 }
             }

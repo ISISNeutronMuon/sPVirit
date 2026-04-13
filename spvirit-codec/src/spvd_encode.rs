@@ -7,8 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::spvd_decode::{FieldDesc, FieldType, StructureDesc, TypeCode};
 
 use spvirit_types::{
-    NdDimension, NtAlarm, NtAttribute, NtDisplay, NtNdArray, NtPayload, NtScalar, NtScalarArray,
-    NtTable, NtTableColumn, NtTimeStamp, ScalarArrayValue, ScalarValue,
+    NdDimension, NtAlarm, NtAttribute, NtDisplay, NtEnum, NtNdArray, NtPayload, NtScalar,
+    NtScalarArray, NtTable, NtTableColumn, NtTimeStamp, PvValue, ScalarArrayValue, ScalarValue,
 };
 
 fn count_structure_fields(desc: &StructureDesc) -> usize {
@@ -1099,12 +1099,131 @@ pub fn encode_nt_ndarray_full(nt: &NtNdArray, is_be: bool) -> Vec<u8> {
     out
 }
 
+// ---------------------------------------------------------------------------
+// NTEnum descriptor & encoder
+// ---------------------------------------------------------------------------
+
+pub fn nt_enum_desc() -> StructureDesc {
+    StructureDesc {
+        struct_id: Some("epics:nt/NTEnum:1.0".to_string()),
+        fields: vec![
+            FieldDesc {
+                name: "value".to_string(),
+                field_type: FieldType::Structure(StructureDesc {
+                    struct_id: Some("enum_t".to_string()),
+                    fields: vec![
+                        FieldDesc {
+                            name: "index".to_string(),
+                            field_type: FieldType::Scalar(TypeCode::Int32),
+                        },
+                        FieldDesc {
+                            name: "choices".to_string(),
+                            field_type: FieldType::StringArray,
+                        },
+                    ],
+                }),
+            },
+            FieldDesc {
+                name: "alarm".to_string(),
+                field_type: FieldType::Structure(alarm_desc()),
+            },
+            FieldDesc {
+                name: "timeStamp".to_string(),
+                field_type: FieldType::Structure(timestamp_desc()),
+            },
+        ],
+    }
+}
+
+pub fn encode_nt_enum_full(nt: &NtEnum, is_be: bool) -> Vec<u8> {
+    let mut out = Vec::new();
+    // value — enum_t { index, choices }
+    out.extend_from_slice(&encode_enum(nt.index, &nt.choices, is_be));
+    // alarm
+    out.extend_from_slice(&encode_nt_alarm(&nt.alarm, is_be));
+    // timeStamp
+    out.extend_from_slice(&encode_nt_timestamp(&nt.time_stamp, is_be));
+    out
+}
+
+// ---------------------------------------------------------------------------
+// PvValue (generic recursive) descriptor & encoder
+// ---------------------------------------------------------------------------
+
+fn scalar_value_type_code(v: &ScalarValue) -> TypeCode {
+    match v {
+        ScalarValue::Bool(_) => TypeCode::Boolean,
+        ScalarValue::I8(_) => TypeCode::Int8,
+        ScalarValue::I16(_) => TypeCode::Int16,
+        ScalarValue::I32(_) => TypeCode::Int32,
+        ScalarValue::I64(_) => TypeCode::Int64,
+        ScalarValue::U8(_) => TypeCode::UInt8,
+        ScalarValue::U16(_) => TypeCode::UInt16,
+        ScalarValue::U32(_) => TypeCode::UInt32,
+        ScalarValue::U64(_) => TypeCode::UInt64,
+        ScalarValue::F32(_) => TypeCode::Float32,
+        ScalarValue::F64(_) => TypeCode::Float64,
+        ScalarValue::Str(_) => TypeCode::String,
+    }
+}
+
+/// Build a [`StructureDesc`] from a [`PvValue::Structure`].
+pub fn pv_value_desc(struct_id: &str, fields: &[(String, PvValue)]) -> StructureDesc {
+    StructureDesc {
+        struct_id: if struct_id.is_empty() {
+            None
+        } else {
+            Some(struct_id.to_string())
+        },
+        fields: fields
+            .iter()
+            .map(|(name, val)| FieldDesc {
+                name: name.clone(),
+                field_type: pv_value_field_type(val),
+            })
+            .collect(),
+    }
+}
+
+fn pv_value_field_type(val: &PvValue) -> FieldType {
+    match val {
+        PvValue::Scalar(sv) => {
+            if matches!(sv, ScalarValue::Str(_)) {
+                FieldType::String
+            } else {
+                FieldType::Scalar(scalar_value_type_code(sv))
+            }
+        }
+        PvValue::ScalarArray(sa) => scalar_array_field_type(sa),
+        PvValue::Structure { struct_id, fields } => {
+            FieldType::Structure(pv_value_desc(struct_id, fields))
+        }
+    }
+}
+
+/// Encode a [`PvValue`] tree to PVA wire bytes (values only, no descriptor).
+pub fn encode_pv_value(val: &PvValue, is_be: bool) -> Vec<u8> {
+    match val {
+        PvValue::Scalar(sv) => encode_scalar_value(sv, is_be),
+        PvValue::ScalarArray(sa) => encode_scalar_array_value_pvd(sa, is_be),
+        PvValue::Structure { fields, .. } => {
+            let mut out = Vec::new();
+            for (_, v) in fields {
+                out.extend_from_slice(&encode_pv_value(v, is_be));
+            }
+            out
+        }
+    }
+}
+
 pub fn nt_payload_desc(payload: &NtPayload) -> StructureDesc {
     match payload {
         NtPayload::Scalar(nt) => nt_scalar_desc(&nt.value),
         NtPayload::ScalarArray(nt) => nt_scalar_array_desc(&nt.value),
         NtPayload::Table(nt) => nt_table_desc(nt),
         NtPayload::NdArray(nt) => nt_ndarray_desc(nt),
+        NtPayload::Enum(_) => nt_enum_desc(),
+        NtPayload::Generic { struct_id, fields } => pv_value_desc(struct_id, fields),
     }
 }
 
@@ -1114,6 +1233,14 @@ pub fn encode_nt_payload_full(payload: &NtPayload, is_be: bool) -> Vec<u8> {
         NtPayload::ScalarArray(nt) => encode_nt_scalar_array_full(nt, is_be),
         NtPayload::Table(nt) => encode_nt_table_full(nt, is_be),
         NtPayload::NdArray(nt) => encode_nt_ndarray_full(nt, is_be),
+        NtPayload::Enum(nt) => encode_nt_enum_full(nt, is_be),
+        NtPayload::Generic { fields, .. } => {
+            let mut out = Vec::new();
+            for (_, v) in fields {
+                out.extend_from_slice(&encode_pv_value(v, is_be));
+            }
+            out
+        }
     }
 }
 
@@ -1181,6 +1308,216 @@ pub fn encode_decoded_value(val: &DecodedValue, is_be: bool) -> Vec<u8> {
         }
         DecodedValue::Raw(data) => data.clone(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// pvRequest parsing & descriptor filtering
+// ---------------------------------------------------------------------------
+
+/// Parse a pvRequest structure from the INIT body bytes and return the list
+/// of requested top-level field names.
+///
+/// Returns `None` if the body is empty or cannot be parsed, which should be
+/// treated as "return all fields" (no filtering).
+pub fn decode_pv_request_fields(body: &[u8], is_be: bool) -> Option<Vec<String>> {
+    if body.is_empty() {
+        return None;
+    }
+    let decoder = crate::spvd_decode::PvdDecoder::new(is_be);
+    let desc = decoder.parse_introspection(body)?;
+    // Find the "field" sub-structure.
+    for field in &desc.fields {
+        if field.name == "field" {
+            if let FieldType::Structure(ref inner) = field.field_type {
+                if inner.fields.is_empty() {
+                    // Empty "field {}" means all fields.
+                    return None;
+                }
+                let names: Vec<String> =
+                    inner.fields.iter().map(|f| f.name.clone()).collect();
+                return Some(names);
+            }
+        }
+    }
+    None
+}
+
+/// Filter a [`StructureDesc`] to include only the listed top-level field
+/// names.  Unknown names are silently ignored.  If `requested` is empty the
+/// original descriptor is returned unchanged.
+pub fn filter_structure_desc(desc: &StructureDesc, requested: &[String]) -> StructureDesc {
+    if requested.is_empty() {
+        return desc.clone();
+    }
+    StructureDesc {
+        struct_id: desc.struct_id.clone(),
+        fields: desc
+            .fields
+            .iter()
+            .filter(|f| requested.iter().any(|r| r == &f.name))
+            .cloned()
+            .collect(),
+    }
+}
+
+/// Encode only the fields of an [`NtPayload`] whose names appear in
+/// `desc`.  The bitset and value bytes are computed against the filtered
+/// descriptor so that a client that received the filtered INIT descriptor
+/// will decode them correctly.
+pub fn encode_nt_payload_filtered(
+    payload: &NtPayload,
+    filtered_desc: &StructureDesc,
+    is_be: bool,
+) -> (Vec<u8>, Vec<u8>) {
+    let requested: Vec<&str> = filtered_desc.fields.iter().map(|f| f.name.as_str()).collect();
+    let full_desc = nt_payload_desc(payload);
+    let full_fields = &full_desc.fields;
+
+    // Map each field in the full descriptor to its encoded bytes.
+    let field_bytes: Vec<(&str, Vec<u8>)> = encode_nt_payload_fields(payload, full_fields, is_be);
+
+    // Build the filtered values and a full-set bitset over the filtered desc.
+    let mut values = Vec::new();
+    for (name, bytes) in &field_bytes {
+        if requested.iter().any(|r| *r == *name) {
+            values.extend_from_slice(bytes);
+        }
+    }
+
+    let bitset = encode_structure_bitset(filtered_desc, is_be);
+    (bitset, values)
+}
+
+/// Helper: encode each top-level field of an NtPayload separately, returning
+/// `(field_name, encoded_bytes)` pairs in descriptor order.
+fn encode_nt_table_field(nt: &NtTable, name: &str, is_be: bool) -> Vec<u8> {
+    match name {
+        "labels" => encode_string_array(&nt.labels, is_be),
+        "value" => {
+            let mut out = Vec::new();
+            for NtTableColumn { values, .. } in &nt.columns {
+                out.extend_from_slice(&encode_scalar_array_value_pvd(values, is_be));
+            }
+            out
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn encode_nt_ndarray_field(nt: &NtNdArray, name: &str, is_be: bool) -> Vec<u8> {
+    match name {
+        "value" => encode_ndarray_union(&nt.value, is_be),
+        "codec" => {
+            let mut out = Vec::new();
+            out.extend_from_slice(&encode_string_pvd(&nt.codec.name, is_be));
+            out.extend_from_slice(&encode_codec_parameters(&nt.codec.parameters, is_be));
+            out
+        }
+        "compressedSize" => encode_i64(nt.compressed_size, is_be),
+        "uncompressedSize" => encode_i64(nt.uncompressed_size, is_be),
+        "dimension" => {
+            let mut out = encode_size_pvd(nt.dimension.len(), is_be);
+            for d in &nt.dimension {
+                out.push(1);
+                out.extend_from_slice(&encode_i32(d.size, is_be));
+                out.extend_from_slice(&encode_i32(d.offset, is_be));
+                out.extend_from_slice(&encode_i32(d.full_size, is_be));
+                out.extend_from_slice(&encode_i32(d.binning, is_be));
+                out.push(if d.reverse { 1 } else { 0 });
+            }
+            out
+        }
+        "uniqueId" => encode_i32(nt.unique_id, is_be),
+        "dataTimeStamp" => encode_nt_timestamp(&nt.data_time_stamp, is_be),
+        "attribute" => {
+            let mut out = encode_size_pvd(nt.attribute.len(), is_be);
+            for attr in &nt.attribute {
+                out.push(1);
+                out.extend_from_slice(&encode_string_pvd(&attr.name, is_be));
+                out.extend_from_slice(&encode_attribute_variant(attr, is_be));
+                out.extend_from_slice(&encode_string_pvd(&attr.descriptor, is_be));
+                out.extend_from_slice(&encode_i32(attr.source_type, is_be));
+                out.extend_from_slice(&encode_string_pvd(&attr.source, is_be));
+            }
+            out
+        }
+        "descriptor" => encode_string_pvd(nt.descriptor.as_deref().unwrap_or(""), is_be),
+        "alarm" => encode_nt_alarm(nt.alarm.as_ref().unwrap_or(&NtAlarm::default()), is_be),
+        "timeStamp" => {
+            encode_nt_timestamp(nt.time_stamp.as_ref().unwrap_or(&NtTimeStamp::default()), is_be)
+        }
+        "display" => {
+            encode_nt_display(nt.display.as_ref().unwrap_or(&NtDisplay::default()), is_be)
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn encode_nt_payload_fields<'a>(
+    payload: &'a NtPayload,
+    full_fields: &'a [FieldDesc],
+    is_be: bool,
+) -> Vec<(&'a str, Vec<u8>)> {
+    // NTScalar field encoders
+    fn scalar_field(nt: &NtScalar, name: &str, is_be: bool) -> Vec<u8> {
+        match name {
+            "value" => encode_scalar_value(&nt.value, is_be),
+            "alarm" => encode_alarm(nt, is_be),
+            "timeStamp" => encode_timestamp(nt, is_be),
+            "display" => encode_display(nt, is_be),
+            "control" => encode_control(nt, is_be),
+            "valueAlarm" => encode_value_alarm(nt, is_be),
+            _ => Vec::new(),
+        }
+    }
+
+    fn scalar_array_field(nt: &NtScalarArray, name: &str, is_be: bool) -> Vec<u8> {
+        match name {
+            "value" => encode_scalar_array_value_pvd(&nt.value, is_be),
+            "alarm" => encode_nt_alarm(&nt.alarm, is_be),
+            "timeStamp" => encode_nt_timestamp(&nt.time_stamp, is_be),
+            "display" => encode_nt_display(&nt.display, is_be),
+            "control" => {
+                let mut out = Vec::new();
+                out.extend_from_slice(&encode_f64(nt.control.limit_low, is_be));
+                out.extend_from_slice(&encode_f64(nt.control.limit_high, is_be));
+                out.extend_from_slice(&encode_f64(nt.control.min_step, is_be));
+                out
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn enum_field(nt: &NtEnum, name: &str, is_be: bool) -> Vec<u8> {
+        match name {
+            "value" => encode_enum(nt.index, &nt.choices, is_be),
+            "alarm" => encode_nt_alarm(&nt.alarm, is_be),
+            "timeStamp" => encode_nt_timestamp(&nt.time_stamp, is_be),
+            _ => Vec::new(),
+        }
+    }
+
+    full_fields
+        .iter()
+        .map(|f| {
+            let name = f.name.as_str();
+            let bytes = match payload {
+                NtPayload::Scalar(nt) => scalar_field(nt, name, is_be),
+                NtPayload::ScalarArray(nt) => scalar_array_field(nt, name, is_be),
+                NtPayload::Table(nt) => encode_nt_table_field(nt, name, is_be),
+                NtPayload::NdArray(nt) => encode_nt_ndarray_field(nt, name, is_be),
+                NtPayload::Enum(nt) => enum_field(nt, name, is_be),
+                NtPayload::Generic { fields, .. } => {
+                    if let Some((_, v)) = fields.iter().find(|(n, _)| n == name) {
+                        encode_pv_value(v, is_be)
+                    } else {
+                        Vec::new()
+                    }
+                }
+            };
+            (name, bytes)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

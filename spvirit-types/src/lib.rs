@@ -456,12 +456,81 @@ impl NtNdArray {
     }
 }
 
+// ---------------------------------------------------------------------------
+// NTEnum — EPICS Normative Type for enumerated values
+// ---------------------------------------------------------------------------
+
+/// NTEnum normative type — represents an enumerated PV value.
+///
+/// The `index` selects one of the `choices` strings.  The wire layout matches
+/// the C++ `epics:nt/NTEnum:1.0` structure:
+///
+/// ```text
+/// structure "epics:nt/NTEnum:1.0"
+///   enum_t value
+///     int index
+///     string[] choices
+///   alarm_t alarm
+///   time_t timeStamp
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct NtEnum {
+    pub index: i32,
+    pub choices: Vec<String>,
+    pub alarm: NtAlarm,
+    pub time_stamp: NtTimeStamp,
+}
+
+impl NtEnum {
+    pub fn new(index: i32, choices: Vec<String>) -> Self {
+        Self {
+            index,
+            choices,
+            alarm: NtAlarm::default(),
+            time_stamp: NtTimeStamp::default(),
+        }
+    }
+
+    /// Returns the currently selected choice string, or `None` if the index
+    /// is out of range.
+    pub fn selected(&self) -> Option<&str> {
+        if self.index >= 0 {
+            self.choices.get(self.index as usize).map(|s| s.as_str())
+        } else {
+            None
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PvValue — recursive value tree for arbitrary PVA structures
+// ---------------------------------------------------------------------------
+
+/// A recursive value type that can represent any PVA structure without
+/// depending on the codec crate.  Used by [`NtPayload::Generic`] to carry
+/// group-PV composite values and other non-normative structures.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PvValue {
+    Scalar(ScalarValue),
+    ScalarArray(ScalarArrayValue),
+    Structure {
+        struct_id: String,
+        fields: Vec<(String, PvValue)>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum NtPayload {
     Scalar(NtScalar),
     ScalarArray(NtScalarArray),
     Table(NtTable),
     NdArray(NtNdArray),
+    Enum(NtEnum),
+    /// Arbitrary PVA structure — used for group PVs and non-normative types.
+    Generic {
+        struct_id: String,
+        fields: Vec<(String, PvValue)>,
+    },
 }
 
 pub(crate) fn default_form_choices() -> Vec<String> {

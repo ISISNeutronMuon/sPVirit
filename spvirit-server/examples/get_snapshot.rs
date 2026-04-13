@@ -54,5 +54,11 @@ fn print_snapshot(pv: &str, payload: &NtPayload) {
         NtPayload::NdArray(nt) => {
             println!("{pv} snapshot: ndarray dims={}", nt.dimension.len());
         }
+        NtPayload::Enum(nt) => {
+            println!("{pv} snapshot: enum index={} selected={:?}", nt.index, nt.selected());
+        }
+        NtPayload::Generic { struct_id, fields } => {
+            println!("{pv} snapshot: generic struct_id={struct_id} fields={}", fields.len());
+        }
     }
 }

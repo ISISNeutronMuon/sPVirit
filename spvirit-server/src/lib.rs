@@ -31,6 +31,7 @@ pub mod handler;
 pub mod server;
 pub mod simple_store;
 pub mod pva_server;
+pub mod group;
 
 // Convenience re-exports.
 pub use pvstore::PvStore;
@@ -39,3 +40,4 @@ pub use server::{PvaServerConfig, PvaServerState, run_pva_server, run_pva_server
 pub use types::{RecordType, RecordData, RecordInstance, DbCommonState, ScanMode, LinkExpr, OutputMode};
 pub use simple_store::SimplePvStore;
 pub use pva_server::{PvaServer, PvaServerBuilder};
+pub use group::{GroupPvDef, GroupMember, GroupPvStore, FieldMapping, TriggerDef, parse_group_config, parse_info_group, merge_group_defs};

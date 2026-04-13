@@ -1126,6 +1126,7 @@ async fn handle_connection(
                                     running: false,
                                     pipeline_enabled,
                                     nfree,
+                                    filtered_desc: None,
                                 });
                             info!(
                                 "Conn {}: monitor init pv='{}' ioid={}",

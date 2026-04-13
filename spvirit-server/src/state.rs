@@ -20,6 +20,8 @@ pub struct MonitorSub {
     pub running: bool,
     pub pipeline_enabled: bool,
     pub nfree: u32,
+    /// When set, only encode these fields in monitor data responses.
+    pub filtered_desc: Option<StructureDesc>,
 }
 
 #[derive(Debug, Clone, Copy)]

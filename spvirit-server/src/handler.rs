@@ -19,7 +19,8 @@ use spvirit_codec::spvirit_encode::{
     encode_connection_validation, encode_control_message,
     encode_create_channel_error, encode_create_channel_response, encode_get_field_error,
     encode_get_field_response, encode_header, encode_message_error,
-    encode_monitor_data_response_payload, encode_op_error, encode_op_get_data_response_payload,
+    encode_monitor_data_response_payload,
+    encode_op_data_response_filtered, encode_op_error, encode_op_get_data_response_payload,
     encode_op_init_response_desc, encode_op_put_get_data_error_response,
     encode_op_put_get_data_response_payload, encode_op_put_get_init_error_response,
     encode_op_put_get_init_response, encode_op_put_getput_response_payload, encode_op_put_response,
@@ -28,7 +29,9 @@ use spvirit_codec::spvirit_encode::{
     ip_from_bytes, ip_to_bytes,
 };
 use spvirit_codec::spvd_decode::{extract_subfield_desc, StructureDesc};
-use spvirit_codec::spvd_encode::nt_payload_desc;
+use spvirit_codec::spvd_encode::{
+    decode_pv_request_fields, filter_structure_desc, nt_payload_desc,
+};
 
 use spvirit_types::{NtPayload, NtScalar, NtScalarArray, ScalarArrayValue, ScalarValue};
 
@@ -1058,7 +1061,13 @@ pub async fn handle_connection<S: PvStore>(
                             continue;
                         };
                         if is_init {
-                            let desc = nt_payload_desc(&nt);
+                            let full_desc = nt_payload_desc(&nt);
+                            let pv_req_fields =
+                                decode_pv_request_fields(&payload.body, is_be);
+                            let desc = match &pv_req_fields {
+                                Some(fields) => filter_structure_desc(&full_desc, fields),
+                                None => full_desc,
+                            };
                             conn_state.ioid_to_desc.insert(ioid, desc.clone());
                             conn_state.ioid_to_pv.insert(ioid, pv_name.clone());
                             let resp = encode_op_init_response_desc(
@@ -1075,9 +1084,15 @@ pub async fn handle_connection<S: PvStore>(
                                 conn_id, pv_name, ioid
                             );
                         } else {
-                            let resp = encode_op_get_data_response_payload(
-                                ioid, &nt, version, is_be,
-                            );
+                            let resp = if let Some(desc) = conn_state.ioid_to_desc.get(&ioid) {
+                                encode_op_data_response_filtered(
+                                    10, ioid, &nt, desc, version, is_be,
+                                )
+                            } else {
+                                encode_op_get_data_response_payload(
+                                    ioid, &nt, version, is_be,
+                                )
+                            };
                             state.registry.send_msg(conn_id, resp).await;
                             debug!(
                                 "Conn {}: get data pv='{}' ioid={}",
@@ -1371,7 +1386,13 @@ pub async fn handle_connection<S: PvStore>(
                                     .await;
                                 continue;
                             };
-                            let desc = nt_payload_desc(&nt);
+                            let full_desc = nt_payload_desc(&nt);
+                            let pv_req_fields =
+                                decode_pv_request_fields(&payload.body, is_be);
+                            let desc = match &pv_req_fields {
+                                Some(fields) => filter_structure_desc(&full_desc, fields),
+                                None => full_desc,
+                            };
                             conn_state.ioid_to_desc.insert(ioid, desc.clone());
                             conn_state.ioid_to_pv.insert(ioid, pv_name.clone());
                             let pipeline_enabled = (payload.subcmd & 0x80) != 0;
@@ -1424,6 +1445,10 @@ pub async fn handle_connection<S: PvStore>(
                                         running: false,
                                         pipeline_enabled,
                                         nfree,
+                                        filtered_desc: conn_state
+                                            .ioid_to_desc
+                                            .get(&ioid)
+                                            .cloned(),
                                     });
                             }
                             info!(

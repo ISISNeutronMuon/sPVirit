@@ -290,6 +290,16 @@ impl RecordInstance {
                 scalar.display_description = "NDArray dimensions".to_string();
                 scalar
             }
+            NtPayload::Enum(nt) => {
+                let mut scalar = NtScalar::from_value(ScalarValue::I32(nt.index));
+                scalar.display_description = nt.selected().unwrap_or("").to_string();
+                scalar
+            }
+            NtPayload::Generic { fields, .. } => {
+                let mut scalar = NtScalar::from_value(ScalarValue::I32(fields.len() as i32));
+                scalar.display_description = "Generic structure".to_string();
+                scalar
+            }
         }
     }
     // 
@@ -303,6 +313,8 @@ impl RecordInstance {
             NtPayload::ScalarArray(nt) => ScalarValue::I32(nt.value.len() as i32),
             NtPayload::Table(nt) => ScalarValue::I32(nt.columns.len() as i32),
             NtPayload::NdArray(nt) => ScalarValue::I32(nt.dimension.len() as i32),
+            NtPayload::Enum(nt) => ScalarValue::I32(nt.index),
+            NtPayload::Generic { fields, .. } => ScalarValue::I32(fields.len() as i32),
         }
     }
 
