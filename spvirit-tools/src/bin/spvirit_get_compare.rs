@@ -3,9 +3,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
-use spvirit_tools::spvirit_client::client::{encode_create_channel_request, encode_get_request};
 use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
 use spvirit_codec::spvirit_encode::{encode_header, encode_string_pva};
+use spvirit_tools::spvirit_client::client::{encode_create_channel_request, encode_get_request};
 
 #[derive(Debug)]
 struct Frame {
@@ -233,8 +233,6 @@ fn encode_authnz_blob(user: &str, host: &str) -> Vec<u8> {
     out.extend_from_slice(host_bytes);
     out
 }
-
-
 
 fn parse_raw_dump(path: &str) -> Result<Vec<Frame>, Box<dyn std::error::Error>> {
     let mut f = File::open(path)?;

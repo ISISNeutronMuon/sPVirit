@@ -6,26 +6,26 @@ use std::time::Duration;
 
 use argparse::{ArgumentParser, Store};
 use chrono::Local;
+use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, RenderDirection, Sparkline, Wrap};
-use ratatui::DefaultTerminal;
 
+use spvirit_codec::spvd_decode::{
+    DecodedValue, extract_nt_scalar_value, format_compact_value, format_structure_desc,
+    format_structure_tree,
+};
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
 use spvirit_tools::spvirit_client::explore::{
-    list_pvs_with_fallback_progress, monitor_pv_from_server, PvListSource,
+    PvListSource, list_pvs_with_fallback_progress, monitor_pv_from_server,
 };
-use spvirit_tools::spvirit_client::format::{format_output, RenderOptions};
+use spvirit_tools::spvirit_client::format::{RenderOptions, format_output};
 use spvirit_tools::spvirit_client::search::{
-    build_search_targets, discover_servers, DiscoveredServer, SearchTarget,
+    DiscoveredServer, SearchTarget, build_search_targets, discover_servers,
 };
 use spvirit_tools::spvirit_client::types::{PvGetOptions, PvGetResult};
-use spvirit_codec::spvd_decode::{
-    extract_nt_scalar_value, format_compact_value, format_structure_desc, format_structure_tree,
-    DecodedValue,
-};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FocusPane {
@@ -1113,7 +1113,11 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &ExploreApp) {
             if let Some(snapshot) = &app.last_snapshot {
                 detail_lines.push("Latest value:".to_string());
                 let render_opts = RenderOptions::default();
-                detail_lines.push(format_output(&snapshot.pv_name, &snapshot.value, &render_opts));
+                detail_lines.push(format_output(
+                    &snapshot.pv_name,
+                    &snapshot.value,
+                    &render_opts,
+                ));
                 detail_lines.push(format!(
                     "compact: {}",
                     format_compact_value(&snapshot.value)

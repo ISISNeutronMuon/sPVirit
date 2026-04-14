@@ -6,8 +6,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use harness::{
-    env_enabled, free_tcp_port, free_udp_port, run_command_success_with_timeout,
-    workspace_bin, LocalServerFixture, ProcessGuard,
+    LocalServerFixture, ProcessGuard, env_enabled, free_tcp_port, free_udp_port,
+    run_command_success_with_timeout, workspace_bin,
 };
 
 /// Locate the java-interop Gradle project root (relative to the workspace).
@@ -40,7 +40,11 @@ fn gradle_cmd(project_dir: &Path) -> Option<String> {
     }
 
     // Fall back to system gradle
-    let name = if cfg!(windows) { "gradle.bat" } else { "gradle" };
+    let name = if cfg!(windows) {
+        "gradle.bat"
+    } else {
+        "gradle"
+    };
     let check = Command::new(name).arg("--version").output();
     if let Ok(output) = check {
         if output.status.success() {
@@ -140,8 +144,8 @@ record(ao, "{}") {{
         ao_pv
     );
 
-    let server = LocalServerFixture::spawn(&db, &["--pvlist-mode", "list"])
-        .expect("spawn spvirit_server");
+    let server =
+        LocalServerFixture::spawn(&db, &["--pvlist-mode", "list"]).expect("spawn spvirit_server");
     let env = server.epics_env();
 
     // beacon_connect
@@ -155,11 +159,7 @@ record(ao, "{}") {{
     )
     .expect("beacon_connect should succeed");
     eprintln!("[java beacon_connect] {}", out);
-    assert!(
-        out.contains("PASS"),
-        "beacon_connect did not PASS: {}",
-        out
-    );
+    assert!(out.contains("PASS"), "beacon_connect did not PASS: {}", out);
 
     // scalar_get
     let out = run_java_interop(
@@ -185,11 +185,7 @@ record(ao, "{}") {{
     )
     .expect("scalar_put_get should succeed");
     eprintln!("[java scalar_put_get] {}", out);
-    assert!(
-        out.contains("PASS"),
-        "scalar_put_get did not PASS: {}",
-        out
-    );
+    assert!(out.contains("PASS"), "scalar_put_get did not PASS: {}", out);
 
     // scalar_monitor
     let out = run_java_interop(
@@ -202,11 +198,7 @@ record(ao, "{}") {{
     )
     .expect("scalar_monitor should succeed");
     eprintln!("[java scalar_monitor] {}", out);
-    assert!(
-        out.contains("PASS"),
-        "scalar_monitor did not PASS: {}",
-        out
-    );
+    assert!(out.contains("PASS"), "scalar_monitor did not PASS: {}", out);
 }
 
 #[test]
@@ -252,17 +244,14 @@ fn java_pvaccess_ndarray_interop() {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
-    let _dodeca = ProcessGuard::spawn(&mut dodeca_cmd, "spawn pvdodeca")
-        .expect("pvdodeca should spawn");
+    let _dodeca =
+        ProcessGuard::spawn(&mut dodeca_cmd, "spawn pvdodeca").expect("pvdodeca should spawn");
     std::thread::sleep(std::time::Duration::from_millis(600));
 
     let env = vec![
         ("EPICS_PVA_ADDR_LIST".to_string(), "127.0.0.1".to_string()),
         ("EPICS_PVA_AUTO_ADDR_LIST".to_string(), "NO".to_string()),
-        (
-            "EPICS_PVA_BROADCAST_PORT".to_string(),
-            udp_port.to_string(),
-        ),
+        ("EPICS_PVA_BROADCAST_PORT".to_string(), udp_port.to_string()),
         ("EPICS_PVA_CONN_TMO".to_string(), "5".to_string()),
     ];
 

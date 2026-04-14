@@ -1,7 +1,7 @@
 use chrono::{TimeZone, Utc};
 use serde_json::json;
 
-use spvirit_codec::spvd_decode::{extract_nt_scalar_value, format_compact_value, DecodedValue};
+use spvirit_codec::spvd_decode::{DecodedValue, extract_nt_scalar_value, format_compact_value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputFormat {

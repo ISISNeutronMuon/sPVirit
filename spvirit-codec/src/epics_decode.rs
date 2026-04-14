@@ -7,36 +7,36 @@ use hex;
 use std::fmt;
 use tracing::debug;
 
+use crate::spvd_decode::{DecodedValue, PvdDecoder, StructureDesc, format_compact_value};
 use crate::spvirit_encode::format_pva_address;
-use crate::spvd_decode::{format_compact_value, DecodedValue, PvdDecoder, StructureDesc};
 
 /// Single source of truth for PVA application command codes.
 ///
 /// Index == command code.  Any code beyond the table returns `"Unknown"`.
 const PVA_COMMAND_NAMES: &[&str] = &[
-    "BEACON",               // 0
+    "BEACON",                // 0
     "CONNECTION_VALIDATION", // 1
-    "ECHO",                 // 2
-    "SEARCH",               // 3
-    "SEARCH_RESPONSE",      // 4
-    "AUTHNZ",               // 5
-    "ACL_CHANGE",           // 6
-    "CREATE_CHANNEL",       // 7
-    "DESTROY_CHANNEL",      // 8
+    "ECHO",                  // 2
+    "SEARCH",                // 3
+    "SEARCH_RESPONSE",       // 4
+    "AUTHNZ",                // 5
+    "ACL_CHANGE",            // 6
+    "CREATE_CHANNEL",        // 7
+    "DESTROY_CHANNEL",       // 8
     "CONNECTION_VALIDATED",  // 9
-    "GET",                  // 10
-    "PUT",                  // 11
-    "PUT_GET",              // 12
-    "MONITOR",              // 13
-    "ARRAY",                // 14
-    "DESTROY_REQUEST",      // 15
-    "PROCESS",              // 16
-    "GET_FIELD",            // 17
-    "MESSAGE",              // 18
-    "MULTIPLE_DATA",        // 19
-    "RPC",                  // 20
-    "CANCEL_REQUEST",       // 21
-    "ORIGIN_TAG",           // 22
+    "GET",                   // 10
+    "PUT",                   // 11
+    "PUT_GET",               // 12
+    "MONITOR",               // 13
+    "ARRAY",                 // 14
+    "DESTROY_REQUEST",       // 15
+    "PROCESS",               // 16
+    "GET_FIELD",             // 17
+    "MESSAGE",               // 18
+    "MULTIPLE_DATA",         // 19
+    "RPC",                   // 20
+    "CANCEL_REQUEST",        // 21
+    "ORIGIN_TAG",            // 22
 ];
 
 /// Look up a PVA command name by its numeric code.
@@ -643,9 +643,8 @@ impl PvaGetFieldPayload {
             // 1) legacy: [cid][field_name]
             // 2) EPICS pvAccess: [sid][ioid][field_name]
             let legacy_field = if raw.len() > 4 {
-                decode_string(&raw[4..], is_be).and_then(|(s, consumed)| {
-                    (4 + consumed == raw.len()).then_some(s)
-                })
+                decode_string(&raw[4..], is_be)
+                    .and_then(|(s, consumed)| (4 + consumed == raw.len()).then_some(s))
             } else {
                 None
             };
@@ -656,9 +655,8 @@ impl PvaGetFieldPayload {
                 } else {
                     u32::from_le_bytes(raw[4..8].try_into().ok()?)
                 };
-                decode_string(&raw[8..], is_be).and_then(|(s, consumed)| {
-                    (8 + consumed == raw.len()).then_some((ioid, s))
-                })
+                decode_string(&raw[8..], is_be)
+                    .and_then(|(s, consumed)| (8 + consumed == raw.len()).then_some((ioid, s)))
             } else {
                 None
             };
@@ -1729,11 +1727,7 @@ impl fmt::Display for PvaDestroyRequestPayload {
 
 impl fmt::Display for PvaOriginTagPayload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "ORIGIN_TAG(addr={})",
-            format_pva_address(&self.address)
-        )
+        write!(f, "ORIGIN_TAG(addr={})", format_pva_address(&self.address))
     }
 }
 
@@ -1834,15 +1828,13 @@ impl fmt::Display for PvaOpPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spvirit_types::{
-        NtPayload, NtScalar, NtScalarArray, ScalarArrayValue, ScalarValue,
-    };
-    use crate::spvirit_encode::encode_header;
     use crate::spvd_decode::extract_nt_scalar_value;
     use crate::spvd_encode::{
         encode_nt_payload_bitset_parts, encode_nt_scalar_bitset_parts, encode_size_pvd,
         nt_payload_desc, nt_scalar_desc,
     };
+    use crate::spvirit_encode::encode_header;
+    use spvirit_types::{NtPayload, NtScalar, NtScalarArray, ScalarArrayValue, ScalarValue};
 
     #[test]
     fn test_decode_status_ok() {

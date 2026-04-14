@@ -3,15 +3,17 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use spvirit_tools::spvirit_client::search::{discover_servers, search_pv, SearchTarget};
+use spvirit_tools::spvirit_client::search::{SearchTarget, discover_servers, search_pv};
 use spvirit_tools::spvirit_client::types::PvGetError;
 
 fn workspace_bin(name: &str) -> String {
     let ext = if cfg!(windows) { ".exe" } else { "" };
     let test_exe = std::env::current_exe().expect("cannot locate test executable");
     test_exe
-        .parent().unwrap()
-        .parent().unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .join(format!("{name}{ext}"))
         .to_string_lossy()
         .to_string()
@@ -165,5 +167,8 @@ async fn search_pv_all_targets_bad_returns_io() {
         .await
         .expect_err("expected IO error when all targets are unusable");
 
-    assert!(matches!(err, PvGetError::Io(_)), "expected IO error, got {err}");
+    assert!(
+        matches!(err, PvGetError::Io(_)),
+        "expected IO error, got {err}"
+    );
 }

@@ -979,7 +979,11 @@ impl PvdDecoder {
 
                     debug!(
                         "Nested structure '{}': parent_present={}, child_start_bit={}, child_count={}, any_child_bits_set={}",
-                        field.name, field_present, child_start_bit, child_field_count, any_child_bits_set
+                        field.name,
+                        field_present,
+                        child_start_bit,
+                        child_field_count,
+                        any_child_bits_set
                     );
 
                     if field_present && !any_child_bits_set {

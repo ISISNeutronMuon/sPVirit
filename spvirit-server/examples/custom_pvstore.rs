@@ -14,17 +14,16 @@
 /// - Read/write from a database
 /// - Integrate with REST APIs
 /// - Proxy to other control systems
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use spvirit_server::pvstore::PvStore;
-use spvirit_server::monitor::MonitorRegistry;
-use spvirit_types::{NtPayload, NtScalar, ScalarValue};
 use spvirit_codec::spvd_decode::{DecodedValue, StructureDesc};
-use tokio::sync::mpsc;
+use spvirit_server::monitor::MonitorRegistry;
+use spvirit_server::pvstore::PvStore;
+use spvirit_types::{NtPayload, NtScalar, ScalarValue};
 use tokio::sync::RwLock;
+use tokio::sync::mpsc;
 
 /// A simulated sensor backend that generates synthetic PV data.
 /// In a real system, this would connect to actual hardware or a database.
@@ -152,9 +151,7 @@ impl SensorBackend {
                 let sensors = self.sensors.read().await;
                 changed_names
                     .iter()
-                    .filter_map(|name| {
-                        sensors.get(name).map(|s| (name.clone(), s.to_payload()))
-                    })
+                    .filter_map(|name| sensors.get(name).map(|s| (name.clone(), s.to_payload())))
                     .collect()
             };
 
@@ -189,17 +186,27 @@ impl PvStore for SensorBackend {
         }
     }
 
-    fn get_snapshot(&self, name: &str) -> impl std::future::Future<Output = Option<NtPayload>> + Send {
+    fn get_snapshot(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = Option<NtPayload>> + Send {
         let sensors = self.sensors.clone();
         let name = name.to_string();
         async move {
             let result = sensors.read().await.get(&name).map(|s| s.to_payload());
-            println!("[get_snapshot] '{}' -> {}", name, if result.is_some() { "Some" } else { "None" });
+            println!(
+                "[get_snapshot] '{}' -> {}",
+                name,
+                if result.is_some() { "Some" } else { "None" }
+            );
             result
         }
     }
 
-    fn get_descriptor(&self, name: &str) -> impl std::future::Future<Output = Option<StructureDesc>> + Send {
+    fn get_descriptor(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = Option<StructureDesc>> + Send {
         let sensors = self.sensors.clone();
         let name = name.to_string();
         async move {
@@ -227,12 +234,10 @@ impl PvStore for SensorBackend {
         async move {
             println!("[put_value] '{}' called with {:?}", name, value);
             let mut sensors = sensors.write().await;
-            let sensor = sensors
-                .get_mut(&name)
-                .ok_or_else(|| {
-                    println!("[put_value] '{}' -> ERROR: PV not found", name);
-                    format!("PV '{}' not found", name)
-                })?;
+            let sensor = sensors.get_mut(&name).ok_or_else(|| {
+                println!("[put_value] '{}' -> ERROR: PV not found", name);
+                format!("PV '{}' not found", name)
+            })?;
 
             if !sensor.writable {
                 println!("[put_value] '{}' -> ERROR: not writable", name);
@@ -244,23 +249,27 @@ impl PvStore for SensorBackend {
                 DecodedValue::Float64(v) => *v,
                 DecodedValue::Int32(v) => *v as f64,
                 DecodedValue::Int64(v) => *v as f64,
-                DecodedValue::Structure(fields) => {
-                    fields
-                        .iter()
-                        .find(|(k, _)| k == "value")
-                        .and_then(|(_, v)| match v {
-                            DecodedValue::Float64(f) => Some(*f),
-                            DecodedValue::Int32(i) => Some(*i as f64),
-                            DecodedValue::Int64(i) => Some(*i as f64),
-                            _ => None,
-                        })
-                        .ok_or_else(|| {
-                            println!("[put_value] '{}' -> ERROR: no numeric 'value' field in structure", name);
-                            "Invalid value format".to_string()
-                        })?
-                }
+                DecodedValue::Structure(fields) => fields
+                    .iter()
+                    .find(|(k, _)| k == "value")
+                    .and_then(|(_, v)| match v {
+                        DecodedValue::Float64(f) => Some(*f),
+                        DecodedValue::Int32(i) => Some(*i as f64),
+                        DecodedValue::Int64(i) => Some(*i as f64),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        println!(
+                            "[put_value] '{}' -> ERROR: no numeric 'value' field in structure",
+                            name
+                        );
+                        "Invalid value format".to_string()
+                    })?,
                 other => {
-                    println!("[put_value] '{}' -> ERROR: unsupported DecodedValue variant: {:?}", name, other);
+                    println!(
+                        "[put_value] '{}' -> ERROR: unsupported DecodedValue variant: {:?}",
+                        name, other
+                    );
                     return Err("Unsupported value type".to_string());
                 }
             };
@@ -277,11 +286,7 @@ impl PvStore for SensorBackend {
         let sensors = self.sensors.clone();
         let name = name.to_string();
         async move {
-            let result = sensors
-                .read()
-                .await
-                .get(&name)
-                .is_some_and(|s| s.writable);
+            let result = sensors.read().await.get(&name).is_some_and(|s| s.writable);
             println!("[is_writable] '{}' -> {}", name, result);
             result
         }

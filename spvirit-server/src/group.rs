@@ -188,10 +188,7 @@ pub fn parse_info_group(record_name: &str, json: &str) -> Result<Vec<GroupPvDef>
 ///
 /// This supports the C++ pattern where multiple records each contribute
 /// members to the same group name.
-pub fn merge_group_defs(
-    existing: &mut HashMap<String, GroupPvDef>,
-    new_defs: Vec<GroupPvDef>,
-) {
+pub fn merge_group_defs(existing: &mut HashMap<String, GroupPvDef>, new_defs: Vec<GroupPvDef>) {
     for def in new_defs {
         existing
             .entry(def.name.clone())
@@ -232,11 +229,7 @@ fn raw_to_group_def(name: String, raw: RawGroupDef) -> Result<GroupPvDef> {
     })
 }
 
-fn parse_member(
-    field_name: &str,
-    raw: &RawMember,
-    all_fields: &[&str],
-) -> Result<GroupMember> {
+fn parse_member(field_name: &str, raw: &RawMember, all_fields: &[&str]) -> Result<GroupMember> {
     let channel = raw
         .channel
         .clone()
@@ -248,7 +241,11 @@ fn parse_member(
         Some("meta") => FieldMapping::Meta,
         Some("any") => FieldMapping::Any,
         Some("proc") => FieldMapping::Proc,
-        Some(other) => return Err(err(format!("member '{field_name}': unknown +type '{other}'"))),
+        Some(other) => {
+            return Err(err(format!(
+                "member '{field_name}': unknown +type '{other}'"
+            )));
+        }
     };
 
     let triggers = match raw.trigger.as_deref() {
@@ -408,9 +405,7 @@ impl<S: PvStore> PvStore for GroupPvStore<S> {
                         continue;
                     }
                     // Find the sub-field matching this member.
-                    if let Some((_, sub_val)) = fields
-                        .iter()
-                        .find(|(n, _)| n == &member.field_name)
+                    if let Some((_, sub_val)) = fields.iter().find(|(n, _)| n == &member.field_name)
                     {
                         match self.inner.put_value(&member.channel, sub_val).await {
                             Ok(mut r) => results.append(&mut r),
@@ -436,8 +431,7 @@ impl<S: PvStore> PvStore for GroupPvStore<S> {
             if let Some(def) = self.groups.get(name) {
                 // A group PV is writable if any non-proc non-meta member is writable.
                 for member in &def.members {
-                    if member.mapping == FieldMapping::Proc
-                        || member.mapping == FieldMapping::Meta
+                    if member.mapping == FieldMapping::Proc || member.mapping == FieldMapping::Meta
                     {
                         continue;
                     }
@@ -567,9 +561,7 @@ fn build_trigger_map(def: &GroupPvDef) -> HashMap<String, Vec<String>> {
 
 /// Wait for any member receiver to produce a value, returning the field name
 /// of the member that updated. Returns `None` when all channels are closed.
-async fn poll_any_member(
-    members: &mut Vec<(String, mpsc::Receiver<NtPayload>)>,
-) -> Option<String> {
+async fn poll_any_member(members: &mut Vec<(String, mpsc::Receiver<NtPayload>)>) -> Option<String> {
     if members.is_empty() {
         return None;
     }
@@ -646,7 +638,10 @@ fn payload_to_full_structure(payload: &NtPayload) -> PvValue {
         NtPayload::Scalar(nt) => {
             let mut fields = vec![
                 ("value".to_string(), PvValue::Scalar(nt.value.clone())),
-                ("alarm".to_string(), alarm_to_pv_value(nt.alarm_severity, nt.alarm_status, &nt.alarm_message)),
+                (
+                    "alarm".to_string(),
+                    alarm_to_pv_value(nt.alarm_severity, nt.alarm_status, &nt.alarm_message),
+                ),
                 ("timeStamp".to_string(), timestamp_to_pv_value_default()),
             ];
             fields.push((
@@ -654,11 +649,26 @@ fn payload_to_full_structure(payload: &NtPayload) -> PvValue {
                 PvValue::Structure {
                     struct_id: "display_t".to_string(),
                     fields: vec![
-                        ("limitLow".to_string(), PvValue::Scalar(ScalarValue::F64(nt.display_low))),
-                        ("limitHigh".to_string(), PvValue::Scalar(ScalarValue::F64(nt.display_high))),
-                        ("description".to_string(), PvValue::Scalar(ScalarValue::Str(nt.display_description.clone()))),
-                        ("units".to_string(), PvValue::Scalar(ScalarValue::Str(nt.units.clone()))),
-                        ("precision".to_string(), PvValue::Scalar(ScalarValue::I32(nt.display_precision))),
+                        (
+                            "limitLow".to_string(),
+                            PvValue::Scalar(ScalarValue::F64(nt.display_low)),
+                        ),
+                        (
+                            "limitHigh".to_string(),
+                            PvValue::Scalar(ScalarValue::F64(nt.display_high)),
+                        ),
+                        (
+                            "description".to_string(),
+                            PvValue::Scalar(ScalarValue::Str(nt.display_description.clone())),
+                        ),
+                        (
+                            "units".to_string(),
+                            PvValue::Scalar(ScalarValue::Str(nt.units.clone())),
+                        ),
+                        (
+                            "precision".to_string(),
+                            PvValue::Scalar(ScalarValue::I32(nt.display_precision)),
+                        ),
                     ],
                 },
             ));
@@ -667,9 +677,18 @@ fn payload_to_full_structure(payload: &NtPayload) -> PvValue {
                 PvValue::Structure {
                     struct_id: "control_t".to_string(),
                     fields: vec![
-                        ("limitLow".to_string(), PvValue::Scalar(ScalarValue::F64(nt.control_low))),
-                        ("limitHigh".to_string(), PvValue::Scalar(ScalarValue::F64(nt.control_high))),
-                        ("minStep".to_string(), PvValue::Scalar(ScalarValue::F64(nt.control_min_step))),
+                        (
+                            "limitLow".to_string(),
+                            PvValue::Scalar(ScalarValue::F64(nt.control_low)),
+                        ),
+                        (
+                            "limitHigh".to_string(),
+                            PvValue::Scalar(ScalarValue::F64(nt.control_high)),
+                        ),
+                        (
+                            "minStep".to_string(),
+                            PvValue::Scalar(ScalarValue::F64(nt.control_min_step)),
+                        ),
                     ],
                 },
             ));
@@ -681,7 +700,10 @@ fn payload_to_full_structure(payload: &NtPayload) -> PvValue {
         NtPayload::ScalarArray(nt) => {
             let fields = vec![
                 ("value".to_string(), PvValue::ScalarArray(nt.value.clone())),
-                ("alarm".to_string(), alarm_to_pv_value(nt.alarm.severity, nt.alarm.status, &nt.alarm.message)),
+                (
+                    "alarm".to_string(),
+                    alarm_to_pv_value(nt.alarm.severity, nt.alarm.status, &nt.alarm.message),
+                ),
                 ("timeStamp".to_string(), timestamp_pv(&nt.time_stamp)),
             ];
             PvValue::Structure {
@@ -696,8 +718,14 @@ fn payload_to_full_structure(payload: &NtPayload) -> PvValue {
                     PvValue::Structure {
                         struct_id: "enum_t".to_string(),
                         fields: vec![
-                            ("index".to_string(), PvValue::Scalar(ScalarValue::I32(nt.index))),
-                            ("choices".to_string(), PvValue::ScalarArray(ScalarArrayValue::Str(nt.choices.clone()))),
+                            (
+                                "index".to_string(),
+                                PvValue::Scalar(ScalarValue::I32(nt.index)),
+                            ),
+                            (
+                                "choices".to_string(),
+                                PvValue::ScalarArray(ScalarArrayValue::Str(nt.choices.clone())),
+                            ),
                         ],
                     },
                 ),
@@ -741,7 +769,10 @@ fn payload_to_meta_only(payload: &NtPayload) -> PvValue {
         NtPayload::Scalar(nt) => PvValue::Structure {
             struct_id: String::new(),
             fields: vec![
-                ("alarm".to_string(), alarm_to_pv_value(nt.alarm_severity, nt.alarm_status, &nt.alarm_message)),
+                (
+                    "alarm".to_string(),
+                    alarm_to_pv_value(nt.alarm_severity, nt.alarm_status, &nt.alarm_message),
+                ),
                 ("timeStamp".to_string(), timestamp_to_pv_value_default()),
             ],
         },
@@ -845,9 +876,18 @@ fn alarm_struct_desc() -> StructureDesc {
     StructureDesc {
         struct_id: Some("alarm_t".to_string()),
         fields: vec![
-            FieldDesc { name: "severity".to_string(), field_type: FieldType::Scalar(TypeCode::Int32) },
-            FieldDesc { name: "status".to_string(), field_type: FieldType::Scalar(TypeCode::Int32) },
-            FieldDesc { name: "message".to_string(), field_type: FieldType::String },
+            FieldDesc {
+                name: "severity".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Int32),
+            },
+            FieldDesc {
+                name: "status".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Int32),
+            },
+            FieldDesc {
+                name: "message".to_string(),
+                field_type: FieldType::String,
+            },
         ],
     }
 }
@@ -856,9 +896,18 @@ fn timestamp_struct_desc() -> StructureDesc {
     StructureDesc {
         struct_id: Some("time_t".to_string()),
         fields: vec![
-            FieldDesc { name: "secondsPastEpoch".to_string(), field_type: FieldType::Scalar(TypeCode::Int64) },
-            FieldDesc { name: "nanoseconds".to_string(), field_type: FieldType::Scalar(TypeCode::Int32) },
-            FieldDesc { name: "userTag".to_string(), field_type: FieldType::Scalar(TypeCode::Int32) },
+            FieldDesc {
+                name: "secondsPastEpoch".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Int64),
+            },
+            FieldDesc {
+                name: "nanoseconds".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Int32),
+            },
+            FieldDesc {
+                name: "userTag".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Int32),
+            },
         ],
     }
 }
@@ -867,9 +916,18 @@ fn alarm_to_pv_value(severity: i32, status: i32, message: &str) -> PvValue {
     PvValue::Structure {
         struct_id: "alarm_t".to_string(),
         fields: vec![
-            ("severity".to_string(), PvValue::Scalar(ScalarValue::I32(severity))),
-            ("status".to_string(), PvValue::Scalar(ScalarValue::I32(status))),
-            ("message".to_string(), PvValue::Scalar(ScalarValue::Str(message.to_string()))),
+            (
+                "severity".to_string(),
+                PvValue::Scalar(ScalarValue::I32(severity)),
+            ),
+            (
+                "status".to_string(),
+                PvValue::Scalar(ScalarValue::I32(status)),
+            ),
+            (
+                "message".to_string(),
+                PvValue::Scalar(ScalarValue::Str(message.to_string())),
+            ),
         ],
     }
 }
@@ -882,9 +940,18 @@ fn timestamp_pv(ts: &spvirit_types::NtTimeStamp) -> PvValue {
     PvValue::Structure {
         struct_id: "time_t".to_string(),
         fields: vec![
-            ("secondsPastEpoch".to_string(), PvValue::Scalar(ScalarValue::I64(ts.seconds_past_epoch))),
-            ("nanoseconds".to_string(), PvValue::Scalar(ScalarValue::I32(ts.nanoseconds))),
-            ("userTag".to_string(), PvValue::Scalar(ScalarValue::I32(ts.user_tag))),
+            (
+                "secondsPastEpoch".to_string(),
+                PvValue::Scalar(ScalarValue::I64(ts.seconds_past_epoch)),
+            ),
+            (
+                "nanoseconds".to_string(),
+                PvValue::Scalar(ScalarValue::I32(ts.nanoseconds)),
+            ),
+            (
+                "userTag".to_string(),
+                PvValue::Scalar(ScalarValue::I32(ts.user_tag)),
+            ),
         ],
     }
 }
@@ -1057,16 +1124,10 @@ mod tests {
     #[test]
     fn merge_groups() {
         let mut existing = HashMap::new();
-        let defs1 = parse_group_config(
-            r#"{ "GRP:a": { "x": { "+channel": "R1:x" } } }"#,
-        )
-        .unwrap();
+        let defs1 = parse_group_config(r#"{ "GRP:a": { "x": { "+channel": "R1:x" } } }"#).unwrap();
         merge_group_defs(&mut existing, defs1);
 
-        let defs2 = parse_group_config(
-            r#"{ "GRP:a": { "y": { "+channel": "R2:y" } } }"#,
-        )
-        .unwrap();
+        let defs2 = parse_group_config(r#"{ "GRP:a": { "y": { "+channel": "R2:y" } } }"#).unwrap();
         merge_group_defs(&mut existing, defs2);
 
         let grp = existing.get("GRP:a").unwrap();

@@ -58,8 +58,11 @@ impl CommonClientArgs {
     /// Short flags `-w` and `-d` are included so that tools like `pvlist`
     /// that historically accepted them keep working.
     pub fn add_to_parser<'a, 'b>(&'a mut self, ap: &'b mut ArgumentParser<'a>) {
-        ap.refer(&mut self.timeout_secs)
-            .add_option(&["-w", "--timeout"], Store, "Timeout in seconds");
+        ap.refer(&mut self.timeout_secs).add_option(
+            &["-w", "--timeout"],
+            Store,
+            "Timeout in seconds",
+        );
         ap.refer(&mut self.server)
             .add_option(&["--server"], Store, "Server address (ip:port)");
         ap.refer(&mut self.search_addr).add_option(

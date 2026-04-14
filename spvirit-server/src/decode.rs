@@ -12,11 +12,7 @@ use spvirit_codec::spvd_encode::encode_size_pvd;
 /// Tries multiple strategies to handle the various PUT encodings produced by
 /// different PVA clients (standard bitset, status-prefixed, shifted bitset,
 /// value-only).
-pub fn decode_put_body(
-    body: &[u8],
-    desc: &StructureDesc,
-    is_be: bool,
-) -> Option<DecodedValue> {
+pub fn decode_put_body(body: &[u8], desc: &StructureDesc, is_be: bool) -> Option<DecodedValue> {
     let decoder = PvdDecoder::new(is_be);
     if let Some((value, _)) = decoder.decode_structure_with_bitset(body, desc) {
         if !decoded_is_empty(&value) {

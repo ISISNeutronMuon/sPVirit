@@ -6,15 +6,17 @@ use std::thread;
 use std::time::Duration;
 
 use spvirit_client::pvget;
-use spvirit_tools::spvirit_client::types::PvGetOptions;
 use spvirit_codec::spvd_decode::format_compact_value;
+use spvirit_tools::spvirit_client::types::PvGetOptions;
 
 fn workspace_bin(name: &str) -> String {
     let ext = if cfg!(windows) { ".exe" } else { "" };
     let test_exe = std::env::current_exe().expect("cannot locate test executable");
     test_exe
-        .parent().unwrap()
-        .parent().unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .join(format!("{name}{ext}"))
         .to_string_lossy()
         .to_string()

@@ -179,8 +179,7 @@ pub const COMMAND_COVERAGE: [ProtocolCommandCoverage; 23] = [
         name: "RPC",
         role: CommandRole::Bidirectional,
         support: SupportLevel::Supported,
-        notes:
-            "Supported for server channel list endpoint when --pvlist-mode=list; otherwise rejected.",
+        notes: "Supported for server channel list endpoint when --pvlist-mode=list; otherwise rejected.",
     },
     ProtocolCommandCoverage {
         command: 21,

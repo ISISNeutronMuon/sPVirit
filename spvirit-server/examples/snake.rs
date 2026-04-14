@@ -29,7 +29,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
-use spvirit_server::{DbCommonState, OutputMode, PvaServer, RecordData, RecordInstance, RecordType};
+use spvirit_server::{
+    DbCommonState, OutputMode, PvaServer, RecordData, RecordInstance, RecordType,
+};
 use spvirit_types::{NdCodec, NdDimension, NtNdArray, NtPayload, ScalarArrayValue, ScalarValue};
 use tokio::sync::mpsc;
 
@@ -94,7 +96,8 @@ impl Game {
     // ── LCG PRNG (no external deps) ───────────────────────────────────
 
     fn rand_next(&mut self) -> u64 {
-        self.rng = self.rng
+        self.rng = self
+            .rng
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1_442_695_040_888_963_407);
         self.rng
@@ -144,12 +147,7 @@ impl Game {
         };
 
         // Wall or self collision → die
-        if nx < 0
-            || nx >= W as i32
-            || ny < 0
-            || ny >= H as i32
-            || self.body.contains(&(nx, ny))
-        {
+        if nx < 0 || nx >= W as i32 || ny < 0 || ny >= H as i32 || self.body.contains(&(nx, ny)) {
             self.alive = false;
             return;
         }
@@ -331,7 +329,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = server.store().clone();
 
     // Insert the NTNDArray display PV (no builder shortcut for this type yet)
-    store.insert("SNAKE:DISPLAY".into(), make_display_record()).await;
+    store
+        .insert("SNAKE:DISPLAY".into(), make_display_record())
+        .await;
 
     println!("Snake server running on port 5075");
     println!();
@@ -397,10 +397,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .set_value("SNAKE:SCORE", ScalarValue::F64(game.score as f64))
                 .await;
             store
-                .set_value(
-                    "SNAKE:HIGHSCORE",
-                    ScalarValue::F64(game.high_score as f64),
-                )
+                .set_value("SNAKE:HIGHSCORE", ScalarValue::F64(game.high_score as f64))
                 .await;
 
             frame = frame.wrapping_add(1);

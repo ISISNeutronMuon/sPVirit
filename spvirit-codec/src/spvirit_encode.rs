@@ -1,13 +1,13 @@
 //! PVA message encoding helpers.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use spvirit_types::{NtPayload, NtScalar};
 use crate::spvd_decode::StructureDesc;
 use crate::spvd_encode::{
     encode_nt_payload_bitset, encode_nt_payload_bitset_parts, encode_nt_payload_filtered,
     encode_nt_payload_full, encode_nt_scalar_bitset, encode_nt_scalar_full, encode_structure_desc,
     nt_payload_desc,
 };
+use spvirit_types::{NtPayload, NtScalar};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 pub fn encode_size_pva(size: usize, is_be: bool) -> Vec<u8> {
     crate::encode_common::encode_size(size, is_be)
@@ -892,7 +892,14 @@ pub fn encode_destroy_channel_response(sid: u32, cid: u32, version: u8, is_be: b
     out
 }
 
-pub fn encode_op_error(command: u8, subcmd: u8, ioid: u32, message: &str, version: u8, is_be: bool) -> Vec<u8> {
+pub fn encode_op_error(
+    command: u8,
+    subcmd: u8,
+    ioid: u32,
+    message: &str,
+    version: u8,
+    is_be: bool,
+) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&if is_be {
         ioid.to_be_bytes()
@@ -1018,8 +1025,9 @@ mod tests {
 
     #[test]
     fn encode_decode_client_connection_validation_roundtrip() {
-        let msg =
-            encode_client_connection_validation(87_040, 32_767, 0, "ca", "alice", "host1", 2, false);
+        let msg = encode_client_connection_validation(
+            87_040, 32_767, 0, "ca", "alice", "host1", 2, false,
+        );
         let mut pkt = PvaPacket::new(&msg);
         let cmd = pkt.decode_payload().expect("decoded");
         match cmd {
@@ -1072,12 +1080,7 @@ mod tests {
     #[test]
     fn get_data_response_includes_status() {
         let nt = NtScalar::from_value(spvirit_types::ScalarValue::F64(1.0));
-        let msg = encode_op_get_data_response_payload(
-            0x11223344,
-            &NtPayload::Scalar(nt),
-            2,
-            false,
-        );
+        let msg = encode_op_get_data_response_payload(0x11223344, &NtPayload::Scalar(nt), 2, false);
         assert!(msg.len() > 13);
         let status_offset = 8 + 4 + 1;
         assert_eq!(msg[status_offset], 0xFF);

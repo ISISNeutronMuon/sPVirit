@@ -19,7 +19,7 @@ use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::task::JoinHandle;
-use tokio::time::{interval, Instant};
+use tokio::time::{Instant, interval};
 
 use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
 use spvirit_codec::spvd_decode::{DecodedValue, PvdDecoder, StructureDesc};
@@ -28,7 +28,7 @@ use spvirit_codec::spvirit_encode::{
     encode_control_message, encode_get_field_request, encode_monitor_request, encode_put_request,
 };
 
-use crate::client::{ensure_status_ok, establish_channel, pvget as low_level_pvget, ChannelConn};
+use crate::client::{ChannelConn, ensure_status_ok, establish_channel, pvget as low_level_pvget};
 use crate::put_encode::encode_put_payload;
 use crate::search::resolve_pv_server;
 use crate::transport::{read_packet, read_until};
@@ -243,11 +243,7 @@ impl PvaClient {
     /// client.pvput("MY:PV", "hello").await?;
     /// client.pvput("MY:PV", serde_json::json!({"value": 1.5})).await?;
     /// ```
-    pub async fn pvput(
-        &self,
-        pv_name: &str,
-        value: impl Into<Value>,
-    ) -> Result<(), PvGetError> {
+    pub async fn pvput(&self, pv_name: &str, value: impl Into<Value>) -> Result<(), PvGetError> {
         let json_val = value.into();
         let ChannelConn {
             mut stream,
@@ -278,9 +274,11 @@ impl PvaClient {
         stream.write_all(&req).await?;
 
         // Read PUT response — verify status
-        let resp_bytes = read_until(&mut stream, self.timeout, |cmd| {
-            matches!(cmd, PvaPacketCommand::Op(op) if op.command == 11 && op.subcmd == 0x00)
-        })
+        let resp_bytes = read_until(
+            &mut stream,
+            self.timeout,
+            |cmd| matches!(cmd, PvaPacketCommand::Op(op) if op.command == 11 && op.subcmd == 0x00),
+        )
         .await?;
         ensure_status_ok(&resp_bytes, is_be, "PUT")?;
 
@@ -376,11 +374,7 @@ impl PvaClient {
     ///     ControlFlow::Continue(())
     /// }).await?;
     /// ```
-    pub async fn pvmonitor<F>(
-        &self,
-        pv_name: &str,
-        mut callback: F,
-    ) -> Result<(), PvGetError>
+    pub async fn pvmonitor<F>(&self, pv_name: &str, mut callback: F) -> Result<(), PvGetError>
     where
         F: FnMut(&DecodedValue) -> ControlFlow<()>,
     {
@@ -462,9 +456,11 @@ impl PvaClient {
         let msg = encode_get_field_request(sid, ioid, None, PVA_VERSION, is_be);
         stream.write_all(&msg).await?;
 
-        let resp_bytes = read_until(&mut stream, self.timeout, |cmd| {
-            matches!(cmd, PvaPacketCommand::Op(op) if op.command == 17)
-        })
+        let resp_bytes = read_until(
+            &mut stream,
+            self.timeout,
+            |cmd| matches!(cmd, PvaPacketCommand::Op(op) if op.command == 17),
+        )
         .await?;
 
         decode_init_introspection(&resp_bytes, "GET_FIELD")
@@ -536,7 +532,14 @@ impl PvaChannel {
         let json_val = value.into();
         let payload = encode_put_payload(&self.put_desc, &json_val, self.is_be)
             .map_err(|e| PvGetError::Protocol(format!("put encode: {e}")))?;
-        let req = encode_put_request(self.sid, self.ioid, 0x00, &payload, self.version, self.is_be);
+        let req = encode_put_request(
+            self.sid,
+            self.ioid,
+            0x00,
+            &payload,
+            self.version,
+            self.is_be,
+        );
         self.writer.write_all(&req).await?;
         Ok(())
     }
@@ -623,9 +626,9 @@ pub fn client_from_opts(opts: &PvOptions) -> PvaClient {
 /// Decode an INIT response to extract the introspection StructureDesc.
 fn decode_init_introspection(raw: &[u8], label: &str) -> Result<StructureDesc, PvGetError> {
     let mut pkt = PvaPacket::new(raw);
-    let cmd = pkt.decode_payload().ok_or_else(|| {
-        PvGetError::Decode(format!("{label} init response decode failed"))
-    })?;
+    let cmd = pkt
+        .decode_payload()
+        .ok_or_else(|| PvGetError::Decode(format!("{label} init response decode failed")))?;
 
     match cmd {
         PvaPacketCommand::Op(op) => {

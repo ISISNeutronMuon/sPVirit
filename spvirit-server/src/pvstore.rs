@@ -4,8 +4,8 @@
 //! (spvirit `RecordInstance` store, epics-rs `PvDatabase`, etc.) to plug into
 //! the same PVA server protocol machinery.
 
-use spvirit_types::NtPayload;
 use spvirit_codec::spvd_decode::{DecodedValue, StructureDesc};
+use spvirit_types::NtPayload;
 use tokio::sync::mpsc;
 
 /// Abstraction over a PV data store that the PVA server protocol handler calls

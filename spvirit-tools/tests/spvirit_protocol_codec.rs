@@ -1,9 +1,9 @@
 mod protocol;
 
-use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
-use spvirit_codec::spvirit_encode::encode_header;
-use spvirit_codec::spvd_decode::PvdDecoder;
 use protocol::coverage_matrix::command_coverage;
+use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
+use spvirit_codec::spvd_decode::PvdDecoder;
+use spvirit_codec::spvirit_encode::encode_header;
 
 fn build_frame(
     command: u8,

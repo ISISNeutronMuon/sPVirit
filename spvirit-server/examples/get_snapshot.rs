@@ -1,4 +1,4 @@
-use spvirit_server::{PvaServer, PvStore};
+use spvirit_server::{PvStore, PvaServer};
 use spvirit_types::{NtPayload, ScalarArrayValue, ScalarValue};
 
 #[tokio::main]
@@ -43,10 +43,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn print_snapshot(pv: &str, payload: &NtPayload) {
     match payload {
         NtPayload::Scalar(nt) => {
-            println!("{pv} snapshot: scalar value={:?} units={}", nt.value, nt.units);
+            println!(
+                "{pv} snapshot: scalar value={:?} units={}",
+                nt.value, nt.units
+            );
         }
         NtPayload::ScalarArray(nt) => {
-            println!("{pv} snapshot: array len={} type={}", nt.value.len(), nt.value.type_label());
+            println!(
+                "{pv} snapshot: array len={} type={}",
+                nt.value.len(),
+                nt.value.type_label()
+            );
         }
         NtPayload::Table(nt) => {
             println!("{pv} snapshot: table columns={}", nt.columns.len());
@@ -55,10 +62,17 @@ fn print_snapshot(pv: &str, payload: &NtPayload) {
             println!("{pv} snapshot: ndarray dims={}", nt.dimension.len());
         }
         NtPayload::Enum(nt) => {
-            println!("{pv} snapshot: enum index={} selected={:?}", nt.index, nt.selected());
+            println!(
+                "{pv} snapshot: enum index={} selected={:?}",
+                nt.index,
+                nt.selected()
+            );
         }
         NtPayload::Generic { struct_id, fields } => {
-            println!("{pv} snapshot: generic struct_id={struct_id} fields={}", fields.len());
+            println!(
+                "{pv} snapshot: generic struct_id={struct_id} fields={}",
+                fields.len()
+            );
         }
     }
 }

@@ -1,15 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use argparse::{ArgumentParser, Store, StoreTrue};
 use regex::Regex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::sync::{mpsc, Mutex, RwLock};
-use tracing::{debug, error, info, Level};
+use tokio::sync::{Mutex, RwLock, mpsc};
+use tracing::{Level, debug, error, info};
 
 use spvirit_tools::spvirit_server::db::load_db;
 use spvirit_tools::spvirit_server::state::{ConnState, MonitorState, MonitorSub};
@@ -19,6 +19,9 @@ use spvirit_tools::spvirit_server::types::{
 };
 
 use spvirit_codec::epics_decode::{PvaHeader, PvaPacket, PvaPacketCommand};
+use spvirit_codec::spvd_decode::{DecodedValue, PvdDecoder};
+use spvirit_codec::spvd_decode::{FieldDesc, FieldType, StructureDesc, TypeCode};
+use spvirit_codec::spvd_encode::{encode_size_pvd, nt_payload_desc};
 use spvirit_codec::spvirit_encode::encode_control_message;
 use spvirit_codec::spvirit_encode::{
     encode_beacon, encode_connection_validation, encode_create_channel_error,
@@ -29,12 +32,8 @@ use spvirit_codec::spvirit_encode::{
     encode_op_put_get_init_error_response, encode_op_put_get_init_response,
     encode_op_put_getput_response_payload, encode_op_put_response, encode_op_put_status_response,
     encode_op_rpc_data_response_payload, encode_op_status_error_response,
-    encode_op_status_response, encode_search_response,
-    ip_to_bytes, ip_from_bytes,
+    encode_op_status_response, encode_search_response, ip_from_bytes, ip_to_bytes,
 };
-use spvirit_codec::spvd_decode::{DecodedValue, PvdDecoder};
-use spvirit_codec::spvd_decode::{FieldDesc, FieldType, StructureDesc, TypeCode};
-use spvirit_codec::spvd_encode::{encode_size_pvd, nt_payload_desc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PvListMode {
@@ -303,13 +302,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reload_state = state.clone();
     let db_file_clone = db_file.clone();
     let reload_task = tokio::spawn(async move {
-        if let Err(e) = run_db_reload(
-            reload_state,
-            db_file_clone,
-            reload_interval,
-        )
-        .await
-        {
+        if let Err(e) = run_db_reload(reload_state, db_file_clone, reload_interval).await {
             error!("DB reload error: {}", e);
         }
     });
@@ -687,7 +680,9 @@ async fn handle_connection(
                     conn_id, version, is_be, val.buffer_size, val.qos, val.authz
                 );
                 // Empirically required by pvAccess clients: send CONNECTION_VALIDATED (cmd=9) status OK.
-                let resp = spvirit_codec::spvirit_encode::encode_connection_validated(true, version, is_be);
+                let resp = spvirit_codec::spvirit_encode::encode_connection_validated(
+                    true, version, is_be,
+                );
                 validate_encoded_packet(conn_id, "conn_validated_resp", &resp);
                 dump_hex_packet(
                     conn_id,
@@ -770,7 +765,14 @@ async fn handle_connection(
                     send_msg(
                         &state,
                         conn_id,
-                        encode_op_error(payload.command, payload.subcmd, ioid, "Unknown SID", version, is_be),
+                        encode_op_error(
+                            payload.command,
+                            payload.subcmd,
+                            ioid,
+                            "Unknown SID",
+                            version,
+                            is_be,
+                        ),
                     )
                     .await;
                     continue;
@@ -1316,7 +1318,8 @@ async fn handle_connection(
             }
             PvaPacketCommand::Echo(payload_bytes) => {
                 // ECHO keepalive: echo back the same payload
-                let mut resp = encode_header(true, is_be, false, version, 2, payload_bytes.len() as u32);
+                let mut resp =
+                    encode_header(true, is_be, false, version, 2, payload_bytes.len() as u32);
                 resp.extend_from_slice(&payload_bytes);
                 send_msg(&state, conn_id, resp).await;
             }
@@ -1722,7 +1725,12 @@ async fn handle_get_field_request(
     is_be: bool,
 ) {
     if payload.is_server {
-        let resp = encode_get_field_error(payload.cid, "Unexpected server GET_FIELD payload", version, is_be);
+        let resp = encode_get_field_error(
+            payload.cid,
+            "Unexpected server GET_FIELD payload",
+            version,
+            is_be,
+        );
         send_msg(state, conn_id, resp).await;
         return;
     }
@@ -1732,7 +1740,12 @@ async fn handle_get_field_request(
     let sid = payload
         .sid
         .or_else(|| conn_state.cid_to_sid.get(&payload.cid).copied())
-        .or_else(|| conn_state.sid_to_pv.contains_key(&payload.cid).then_some(payload.cid))
+        .or_else(|| {
+            conn_state
+                .sid_to_pv
+                .contains_key(&payload.cid)
+                .then_some(payload.cid)
+        })
         .or_else(|| {
             (payload.cid == 0 && conn_state.sid_to_pv.len() == 1)
                 .then(|| conn_state.sid_to_pv.keys().copied().next())
@@ -1744,10 +1757,7 @@ async fn handle_get_field_request(
             if let Some(nt) = get_nt_snapshot(state, pv_name).await {
                 let full_desc = nt_payload_desc(&nt);
                 // If a sub-field name was requested, filter the introspection
-                let sub = payload
-                    .field_name
-                    .as_deref()
-                    .filter(|s| !s.is_empty());
+                let sub = payload.field_name.as_deref().filter(|s| !s.is_empty());
                 let desc = if let Some(field_path) = sub {
                     use spvirit_codec::spvd_decode::extract_subfield_desc;
                     match extract_subfield_desc(&full_desc, field_path) {
@@ -1771,7 +1781,13 @@ async fn handle_get_field_request(
                 send_msg(state, conn_id, resp).await;
                 debug!(
                     "Conn {}: get_field cid={} sid={:?} ioid={:?} resolved_sid={} pv='{}' field={:?}",
-                    conn_id, payload.cid, payload.sid, payload.ioid, sid, pv_name, payload.field_name
+                    conn_id,
+                    payload.cid,
+                    payload.sid,
+                    payload.ioid,
+                    sid,
+                    pv_name,
+                    payload.field_name
                 );
                 return;
             }
@@ -1793,8 +1809,12 @@ async fn handle_get_field_request(
     }
 
     let Some(pattern) = requested_pvlist_pattern(payload.field_name.as_deref()) else {
-        let resp =
-            encode_get_field_error(request_id, "GET_FIELD requires a valid list pattern", version, is_be);
+        let resp = encode_get_field_error(
+            request_id,
+            "GET_FIELD requires a valid list pattern",
+            version,
+            is_be,
+        );
         send_msg(state, conn_id, resp).await;
         return;
     };
@@ -1810,13 +1830,21 @@ async fn handle_get_field_request(
         names.retain(|name| wildcard_match(pattern, name));
     }
     if names.is_empty() {
-        let resp = encode_get_field_error(request_id, "No PVs matched list request", version, is_be);
+        let resp =
+            encode_get_field_error(request_id, "No PVs matched list request", version, is_be);
         send_msg(state, conn_id, resp).await;
         return;
     }
     let desc = build_pvlist_structure(&names);
     let resp = encode_get_field_response(request_id, &desc, version, is_be);
-    dump_hex_packet(conn_id, "tx", "cmd=17 get_field_list", version, is_be, &resp);
+    dump_hex_packet(
+        conn_id,
+        "tx",
+        "cmd=17 get_field_list",
+        version,
+        is_be,
+        &resp,
+    );
     send_msg(state, conn_id, resp).await;
     debug!(
         "Conn {}: get_field list pattern='{}' returned {} entries",
@@ -1856,9 +1884,11 @@ async fn handle_server_rpc(
             state.pvlist_max,
         )
     };
-    let payload = NtPayload::ScalarArray(spvirit_tools::spvirit_server::types::NtScalarArray::from_value(
-        ScalarArrayValue::Str(names),
-    ));
+    let payload = NtPayload::ScalarArray(
+        spvirit_tools::spvirit_server::types::NtScalarArray::from_value(ScalarArrayValue::Str(
+            names,
+        )),
+    );
 
     let is_init = (subcmd & 0x08) != 0;
     if is_init {
@@ -1888,9 +1918,11 @@ fn virtual_event_nt(pv_name: &str) -> NtPayload {
 }
 
 fn virtual_pvlist_nt(entries: Vec<String>) -> NtPayload {
-    NtPayload::ScalarArray(spvirit_tools::spvirit_server::types::NtScalarArray::from_value(
-        ScalarArrayValue::Str(entries),
-    ))
+    NtPayload::ScalarArray(
+        spvirit_tools::spvirit_server::types::NtScalarArray::from_value(ScalarArrayValue::Str(
+            entries,
+        )),
+    )
 }
 
 async fn get_nt_snapshot(state: &Arc<ServerState>, pv_name: &str) -> Option<NtPayload> {
@@ -2458,7 +2490,12 @@ fn process_record_body(
                     if let NtPayload::Table(nt) = record.data.payload() {
                         for col in &nt.columns {
                             write_link_array_value(
-                                store, link, col.values.clone(), compute_alarms, active, changed_names,
+                                store,
+                                link,
+                                col.values.clone(),
+                                compute_alarms,
+                                active,
+                                changed_names,
                             );
                         }
                     }
@@ -2482,7 +2519,12 @@ fn process_record_body(
                 if let Some(record) = store.get(pv_name) {
                     if let NtPayload::NdArray(nt) = record.data.payload() {
                         write_link_array_value(
-                            store, link, nt.value.clone(), compute_alarms, active, changed_names,
+                            store,
+                            link,
+                            nt.value.clone(),
+                            compute_alarms,
+                            active,
+                            changed_names,
                         );
                     }
                 }
@@ -2785,7 +2827,10 @@ fn apply_scalar_array_put(
     false
 }
 
-fn apply_table_put(nt: &mut spvirit_tools::spvirit_server::types::NtTable, value: &DecodedValue) -> bool {
+fn apply_table_put(
+    nt: &mut spvirit_tools::spvirit_server::types::NtTable,
+    value: &DecodedValue,
+) -> bool {
     let DecodedValue::Structure(fields) = value else {
         return false;
     };
@@ -2846,7 +2891,10 @@ fn apply_table_put(nt: &mut spvirit_tools::spvirit_server::types::NtTable, value
     changed
 }
 
-fn apply_ndarray_put(nt: &mut spvirit_tools::spvirit_server::types::NtNdArray, value: &DecodedValue) -> bool {
+fn apply_ndarray_put(
+    nt: &mut spvirit_tools::spvirit_server::types::NtNdArray,
+    value: &DecodedValue,
+) -> bool {
     let DecodedValue::Structure(fields) = value else {
         return false;
     };
@@ -2909,11 +2957,31 @@ fn apply_ndarray_put(nt: &mut spvirit_tools::spvirit_server::types::NtNdArray, v
                         .filter_map(|item| {
                             if let DecodedValue::Structure(fs) = item {
                                 Some(spvirit_tools::spvirit_server::types::NdDimension {
-                                    size: fs.iter().find(|(n, _)| n == "size").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0),
-                                    offset: fs.iter().find(|(n, _)| n == "offset").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0),
-                                    full_size: fs.iter().find(|(n, _)| n == "fullSize").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0),
-                                    binning: fs.iter().find(|(n, _)| n == "binning").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(1),
-                                    reverse: fs.iter().find(|(n, _)| n == "reverse").and_then(|(_, v)| decoded_to_bool(v)).unwrap_or(false),
+                                    size: fs
+                                        .iter()
+                                        .find(|(n, _)| n == "size")
+                                        .and_then(|(_, v)| decoded_to_i32(v))
+                                        .unwrap_or(0),
+                                    offset: fs
+                                        .iter()
+                                        .find(|(n, _)| n == "offset")
+                                        .and_then(|(_, v)| decoded_to_i32(v))
+                                        .unwrap_or(0),
+                                    full_size: fs
+                                        .iter()
+                                        .find(|(n, _)| n == "fullSize")
+                                        .and_then(|(_, v)| decoded_to_i32(v))
+                                        .unwrap_or(0),
+                                    binning: fs
+                                        .iter()
+                                        .find(|(n, _)| n == "binning")
+                                        .and_then(|(_, v)| decoded_to_i32(v))
+                                        .unwrap_or(1),
+                                    reverse: fs
+                                        .iter()
+                                        .find(|(n, _)| n == "reverse")
+                                        .and_then(|(_, v)| decoded_to_bool(v))
+                                        .unwrap_or(false),
                                 })
                             } else {
                                 None
@@ -2973,11 +3041,31 @@ fn apply_ndarray_put(nt: &mut spvirit_tools::spvirit_server::types::NtNdArray, v
                         .iter()
                         .filter_map(|item| {
                             if let DecodedValue::Structure(fs) = item {
-                                let attr_name = fs.iter().find(|(n, _)| n == "name").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
-                                let attr_value = fs.iter().find(|(n, _)| n == "value").map(|(_, v)| decoded_to_scalar_value(v)).unwrap_or(ScalarValue::I32(0));
-                                let descriptor = fs.iter().find(|(n, _)| n == "descriptor").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
-                                let source_type = fs.iter().find(|(n, _)| n == "sourceType").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-                                let source = fs.iter().find(|(n, _)| n == "source").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
+                                let attr_name = fs
+                                    .iter()
+                                    .find(|(n, _)| n == "name")
+                                    .and_then(|(_, v)| decoded_to_string(v))
+                                    .unwrap_or_default();
+                                let attr_value = fs
+                                    .iter()
+                                    .find(|(n, _)| n == "value")
+                                    .map(|(_, v)| decoded_to_scalar_value(v))
+                                    .unwrap_or(ScalarValue::I32(0));
+                                let descriptor = fs
+                                    .iter()
+                                    .find(|(n, _)| n == "descriptor")
+                                    .and_then(|(_, v)| decoded_to_string(v))
+                                    .unwrap_or_default();
+                                let source_type = fs
+                                    .iter()
+                                    .find(|(n, _)| n == "sourceType")
+                                    .and_then(|(_, v)| decoded_to_i32(v))
+                                    .unwrap_or(0);
+                                let source = fs
+                                    .iter()
+                                    .find(|(n, _)| n == "source")
+                                    .and_then(|(_, v)| decoded_to_string(v))
+                                    .unwrap_or_default();
                                 Some(spvirit_tools::spvirit_server::types::NtAttribute {
                                     name: attr_name,
                                     value: attr_value,
@@ -3096,14 +3184,30 @@ fn apply_value_update(nt: &mut NtScalar, val: &DecodedValue, compute_alarms: boo
         _ => {
             if let Some(v) = decoded_to_f64(val) {
                 match &mut nt.value {
-                    spvirit_tools::spvirit_server::types::ScalarValue::I8(c) => { *c = v as i8; }
-                    spvirit_tools::spvirit_server::types::ScalarValue::I16(c) => { *c = v as i16; }
-                    spvirit_tools::spvirit_server::types::ScalarValue::I64(c) => { *c = v as i64; }
-                    spvirit_tools::spvirit_server::types::ScalarValue::U8(c) => { *c = v as u8; }
-                    spvirit_tools::spvirit_server::types::ScalarValue::U16(c) => { *c = v as u16; }
-                    spvirit_tools::spvirit_server::types::ScalarValue::U32(c) => { *c = v as u32; }
-                    spvirit_tools::spvirit_server::types::ScalarValue::U64(c) => { *c = v as u64; }
-                    spvirit_tools::spvirit_server::types::ScalarValue::F32(c) => { *c = v as f32; }
+                    spvirit_tools::spvirit_server::types::ScalarValue::I8(c) => {
+                        *c = v as i8;
+                    }
+                    spvirit_tools::spvirit_server::types::ScalarValue::I16(c) => {
+                        *c = v as i16;
+                    }
+                    spvirit_tools::spvirit_server::types::ScalarValue::I64(c) => {
+                        *c = v as i64;
+                    }
+                    spvirit_tools::spvirit_server::types::ScalarValue::U8(c) => {
+                        *c = v as u8;
+                    }
+                    spvirit_tools::spvirit_server::types::ScalarValue::U16(c) => {
+                        *c = v as u16;
+                    }
+                    spvirit_tools::spvirit_server::types::ScalarValue::U32(c) => {
+                        *c = v as u32;
+                    }
+                    spvirit_tools::spvirit_server::types::ScalarValue::U64(c) => {
+                        *c = v as u64;
+                    }
+                    spvirit_tools::spvirit_server::types::ScalarValue::F32(c) => {
+                        *c = v as f32;
+                    }
                     _ => return false,
                 }
                 if compute_alarms {
@@ -3390,32 +3494,94 @@ fn decode_nt_alarm(val: &DecodedValue) -> Option<spvirit_tools::spvirit_server::
     let DecodedValue::Structure(fields) = val else {
         return None;
     };
-    let severity = fields.iter().find(|(n, _)| n == "severity").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-    let status = fields.iter().find(|(n, _)| n == "status").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-    let message = fields.iter().find(|(n, _)| n == "message").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
-    Some(spvirit_tools::spvirit_server::types::NtAlarm { severity, status, message })
+    let severity = fields
+        .iter()
+        .find(|(n, _)| n == "severity")
+        .and_then(|(_, v)| decoded_to_i32(v))
+        .unwrap_or(0);
+    let status = fields
+        .iter()
+        .find(|(n, _)| n == "status")
+        .and_then(|(_, v)| decoded_to_i32(v))
+        .unwrap_or(0);
+    let message = fields
+        .iter()
+        .find(|(n, _)| n == "message")
+        .and_then(|(_, v)| decoded_to_string(v))
+        .unwrap_or_default();
+    Some(spvirit_tools::spvirit_server::types::NtAlarm {
+        severity,
+        status,
+        message,
+    })
 }
 
-fn decode_nt_timestamp(val: &DecodedValue) -> Option<spvirit_tools::spvirit_server::types::NtTimeStamp> {
+fn decode_nt_timestamp(
+    val: &DecodedValue,
+) -> Option<spvirit_tools::spvirit_server::types::NtTimeStamp> {
     let DecodedValue::Structure(fields) = val else {
         return None;
     };
-    let seconds = fields.iter().find(|(n, _)| n == "secondsPastEpoch").and_then(|(_, v)| decoded_to_i64(v)).unwrap_or(0);
-    let nanos = fields.iter().find(|(n, _)| n == "nanoseconds").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-    let user_tag = fields.iter().find(|(n, _)| n == "userTag").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-    Some(spvirit_tools::spvirit_server::types::NtTimeStamp { seconds_past_epoch: seconds, nanoseconds: nanos, user_tag })
+    let seconds = fields
+        .iter()
+        .find(|(n, _)| n == "secondsPastEpoch")
+        .and_then(|(_, v)| decoded_to_i64(v))
+        .unwrap_or(0);
+    let nanos = fields
+        .iter()
+        .find(|(n, _)| n == "nanoseconds")
+        .and_then(|(_, v)| decoded_to_i32(v))
+        .unwrap_or(0);
+    let user_tag = fields
+        .iter()
+        .find(|(n, _)| n == "userTag")
+        .and_then(|(_, v)| decoded_to_i32(v))
+        .unwrap_or(0);
+    Some(spvirit_tools::spvirit_server::types::NtTimeStamp {
+        seconds_past_epoch: seconds,
+        nanoseconds: nanos,
+        user_tag,
+    })
 }
 
-fn decode_nt_display(val: &DecodedValue) -> Option<spvirit_tools::spvirit_server::types::NtDisplay> {
+fn decode_nt_display(
+    val: &DecodedValue,
+) -> Option<spvirit_tools::spvirit_server::types::NtDisplay> {
     let DecodedValue::Structure(fields) = val else {
         return None;
     };
-    let limit_low = fields.iter().find(|(n, _)| n == "limitLow").and_then(|(_, v)| decoded_to_f64(v)).unwrap_or(0.0);
-    let limit_high = fields.iter().find(|(n, _)| n == "limitHigh").and_then(|(_, v)| decoded_to_f64(v)).unwrap_or(0.0);
-    let description = fields.iter().find(|(n, _)| n == "description").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
-    let units = fields.iter().find(|(n, _)| n == "units").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
-    let precision = fields.iter().find(|(n, _)| n == "precision").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-    Some(spvirit_tools::spvirit_server::types::NtDisplay { limit_low, limit_high, description, units, precision })
+    let limit_low = fields
+        .iter()
+        .find(|(n, _)| n == "limitLow")
+        .and_then(|(_, v)| decoded_to_f64(v))
+        .unwrap_or(0.0);
+    let limit_high = fields
+        .iter()
+        .find(|(n, _)| n == "limitHigh")
+        .and_then(|(_, v)| decoded_to_f64(v))
+        .unwrap_or(0.0);
+    let description = fields
+        .iter()
+        .find(|(n, _)| n == "description")
+        .and_then(|(_, v)| decoded_to_string(v))
+        .unwrap_or_default();
+    let units = fields
+        .iter()
+        .find(|(n, _)| n == "units")
+        .and_then(|(_, v)| decoded_to_string(v))
+        .unwrap_or_default();
+    let precision = fields
+        .iter()
+        .find(|(n, _)| n == "precision")
+        .and_then(|(_, v)| decoded_to_i32(v))
+        .unwrap_or(0);
+    Some(spvirit_tools::spvirit_server::types::NtDisplay {
+        limit_low,
+        limit_high,
+        description,
+        units,
+        precision,
+    })
 }
 
 fn decode_put_body(
@@ -3611,8 +3777,9 @@ mod tests {
 
     #[test]
     fn apply_value_update_refreshes_alarm_from_limits() {
-        let mut nt = NtScalar::from_value(spvirit_tools::spvirit_server::types::ScalarValue::F64(0.0))
-            .with_alarm_limits(Some(-8.0), Some(8.0), Some(-9.5), Some(9.5));
+        let mut nt =
+            NtScalar::from_value(spvirit_tools::spvirit_server::types::ScalarValue::F64(0.0))
+                .with_alarm_limits(Some(-8.0), Some(8.0), Some(-9.5), Some(9.5));
 
         let changed = apply_value_update(&mut nt, &DecodedValue::Float64(9.6), true);
         assert!(changed);

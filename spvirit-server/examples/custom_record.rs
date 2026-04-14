@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use spvirit_server::{DbCommonState, PvaServer, RecordData, RecordInstance, RecordType};
 use spvirit_types::{NtScalar, ScalarValue};
+use std::collections::HashMap;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -19,14 +19,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             inp: None,
             siml: None,
             siol: None,
-            simm:true,
+            simm: true,
         },
         raw_fields: HashMap::new(),
     };
 
-    let server = PvaServer::builder()
-        .ao("CUSTOM:SETPOINT", 25.0)
-        .build();
+    let server = PvaServer::builder().ao("CUSTOM:SETPOINT", 25.0).build();
 
     server.store().insert("CUSTOM:SENSOR".into(), custom).await;
 

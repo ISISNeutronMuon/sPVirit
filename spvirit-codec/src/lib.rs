@@ -8,18 +8,20 @@
 
 pub mod encode_common;
 pub mod epics_decode;
-pub mod spvirit_encode;
-pub mod spvirit_state;
 pub mod spvd_decode;
 pub mod spvd_encode;
+pub mod spvirit_encode;
+pub mod spvirit_state;
 
 // --- Re-exports: PVA wire-format decode types ---
 pub use epics_decode::{
-    decode_string, PvaCommands, PvaHeader, PvaPacket, PvaPacketCommand, PvaStatus,
+    PvaCommands, PvaHeader, PvaPacket, PvaPacketCommand, PvaStatus, decode_string,
 };
 
 // --- Re-exports: PVA wire-format encode helpers ---
-pub use spvirit_encode::{encode_control_message, encode_header, format_pva_address, ip_from_bytes, ip_to_bytes};
+pub use spvirit_encode::{
+    encode_control_message, encode_header, format_pva_address, ip_from_bytes, ip_to_bytes,
+};
 
 // --- Re-exports: connection state tracking ---
 pub use spvirit_state::{ConnectionKey, PvaStateConfig, PvaStateStats, PvaStateTracker};

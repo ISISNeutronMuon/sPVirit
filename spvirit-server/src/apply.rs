@@ -52,14 +52,30 @@ pub fn apply_value_update(nt: &mut NtScalar, val: &DecodedValue, compute_alarms:
         _ => {
             if let Some(v) = decoded_to_f64(val) {
                 match &mut nt.value {
-                    ScalarValue::I8(c) => { *c = v as i8; }
-                    ScalarValue::I16(c) => { *c = v as i16; }
-                    ScalarValue::I64(c) => { *c = v as i64; }
-                    ScalarValue::U8(c) => { *c = v as u8; }
-                    ScalarValue::U16(c) => { *c = v as u16; }
-                    ScalarValue::U32(c) => { *c = v as u32; }
-                    ScalarValue::U64(c) => { *c = v as u64; }
-                    ScalarValue::F32(c) => { *c = v as f32; }
+                    ScalarValue::I8(c) => {
+                        *c = v as i8;
+                    }
+                    ScalarValue::I16(c) => {
+                        *c = v as i16;
+                    }
+                    ScalarValue::I64(c) => {
+                        *c = v as i64;
+                    }
+                    ScalarValue::U8(c) => {
+                        *c = v as u8;
+                    }
+                    ScalarValue::U16(c) => {
+                        *c = v as u16;
+                    }
+                    ScalarValue::U32(c) => {
+                        *c = v as u32;
+                    }
+                    ScalarValue::U64(c) => {
+                        *c = v as u64;
+                    }
+                    ScalarValue::F32(c) => {
+                        *c = v as f32;
+                    }
                     _ => return false,
                 }
                 if compute_alarms {
@@ -361,11 +377,31 @@ pub fn apply_ndarray_put(nt: &mut NtNdArray, value: &DecodedValue) -> bool {
                         .filter_map(|item| {
                             if let DecodedValue::Structure(fs) = item {
                                 Some(NdDimension {
-                                    size: fs.iter().find(|(n, _)| n == "size").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0),
-                                    offset: fs.iter().find(|(n, _)| n == "offset").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0),
-                                    full_size: fs.iter().find(|(n, _)| n == "fullSize").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0),
-                                    binning: fs.iter().find(|(n, _)| n == "binning").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(1),
-                                    reverse: fs.iter().find(|(n, _)| n == "reverse").and_then(|(_, v)| decoded_to_bool(v)).unwrap_or(false),
+                                    size: fs
+                                        .iter()
+                                        .find(|(n, _)| n == "size")
+                                        .and_then(|(_, v)| decoded_to_i32(v))
+                                        .unwrap_or(0),
+                                    offset: fs
+                                        .iter()
+                                        .find(|(n, _)| n == "offset")
+                                        .and_then(|(_, v)| decoded_to_i32(v))
+                                        .unwrap_or(0),
+                                    full_size: fs
+                                        .iter()
+                                        .find(|(n, _)| n == "fullSize")
+                                        .and_then(|(_, v)| decoded_to_i32(v))
+                                        .unwrap_or(0),
+                                    binning: fs
+                                        .iter()
+                                        .find(|(n, _)| n == "binning")
+                                        .and_then(|(_, v)| decoded_to_i32(v))
+                                        .unwrap_or(1),
+                                    reverse: fs
+                                        .iter()
+                                        .find(|(n, _)| n == "reverse")
+                                        .and_then(|(_, v)| decoded_to_bool(v))
+                                        .unwrap_or(false),
                                 })
                             } else {
                                 None
@@ -425,11 +461,31 @@ pub fn apply_ndarray_put(nt: &mut NtNdArray, value: &DecodedValue) -> bool {
                         .iter()
                         .filter_map(|item| {
                             if let DecodedValue::Structure(fs) = item {
-                                let attr_name = fs.iter().find(|(n, _)| n == "name").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
-                                let attr_value = fs.iter().find(|(n, _)| n == "value").map(|(_, v)| decoded_to_scalar_value(v)).unwrap_or(ScalarValue::I32(0));
-                                let descriptor = fs.iter().find(|(n, _)| n == "descriptor").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
-                                let source_type = fs.iter().find(|(n, _)| n == "sourceType").and_then(|(_, v)| decoded_to_i32(v)).unwrap_or(0);
-                                let source = fs.iter().find(|(n, _)| n == "source").and_then(|(_, v)| decoded_to_string(v)).unwrap_or_default();
+                                let attr_name = fs
+                                    .iter()
+                                    .find(|(n, _)| n == "name")
+                                    .and_then(|(_, v)| decoded_to_string(v))
+                                    .unwrap_or_default();
+                                let attr_value = fs
+                                    .iter()
+                                    .find(|(n, _)| n == "value")
+                                    .map(|(_, v)| decoded_to_scalar_value(v))
+                                    .unwrap_or(ScalarValue::I32(0));
+                                let descriptor = fs
+                                    .iter()
+                                    .find(|(n, _)| n == "descriptor")
+                                    .and_then(|(_, v)| decoded_to_string(v))
+                                    .unwrap_or_default();
+                                let source_type = fs
+                                    .iter()
+                                    .find(|(n, _)| n == "sourceType")
+                                    .and_then(|(_, v)| decoded_to_i32(v))
+                                    .unwrap_or(0);
+                                let source = fs
+                                    .iter()
+                                    .find(|(n, _)| n == "source")
+                                    .and_then(|(_, v)| decoded_to_string(v))
+                                    .unwrap_or_default();
                                 Some(NtAttribute {
                                     name: attr_name,
                                     value: attr_value,

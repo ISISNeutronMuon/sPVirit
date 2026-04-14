@@ -1,12 +1,10 @@
 use std::collections::HashMap;
 
+use spvirit_codec::spvd_decode::{DecodedValue, PvdDecoder};
+use spvirit_codec::spvd_encode::{encode_nt_payload_full, encode_structure_desc, nt_payload_desc};
 use spvirit_tools::spvirit_server::types::{
     NdCodec, NdDimension, NtAttribute, NtNdArray, NtPayload, NtScalarArray, NtTable, NtTableColumn,
     ScalarArrayValue, ScalarValue,
-};
-use spvirit_codec::spvd_decode::{DecodedValue, PvdDecoder};
-use spvirit_codec::spvd_encode::{
-    encode_nt_payload_full, encode_structure_desc, nt_payload_desc,
 };
 
 fn roundtrip_payload(payload: &NtPayload) -> DecodedValue {

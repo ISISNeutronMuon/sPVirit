@@ -2,9 +2,9 @@ mod protocol;
 
 use std::time::Duration;
 
-use spvirit_codec::epics_decode::PvaPacketCommand;
 use protocol::frame_harness::TestServer;
 use protocol::scenario_harness::ScenarioSession;
+use spvirit_codec::epics_decode::PvaPacketCommand;
 
 const PV_REQUEST_EMPTY: [u8; 6] = [0xfd, 0x02, 0x00, 0x80, 0x00, 0x00];
 

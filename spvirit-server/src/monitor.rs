@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tracing::debug;
 
 use spvirit_codec::spvirit_encode::{
@@ -57,11 +57,20 @@ impl MonitorRegistry {
                     }
                     let msg = if let Some(ref desc) = sub.filtered_desc {
                         encode_monitor_data_response_filtered(
-                            sub.ioid, subcmd, payload, desc, sub.version, sub.is_be,
+                            sub.ioid,
+                            subcmd,
+                            payload,
+                            desc,
+                            sub.version,
+                            sub.is_be,
                         )
                     } else {
                         encode_monitor_data_response_payload(
-                            sub.ioid, subcmd, payload, sub.version, sub.is_be,
+                            sub.ioid,
+                            subcmd,
+                            payload,
+                            sub.version,
+                            sub.is_be,
                         )
                     };
                     to_send.push((sub.conn_id, msg));
@@ -103,11 +112,20 @@ impl MonitorRegistry {
                     }
                     let msg = if let Some(ref desc) = sub.filtered_desc {
                         encode_monitor_data_response_filtered(
-                            sub.ioid, subcmd, payload, desc, sub.version, sub.is_be,
+                            sub.ioid,
+                            subcmd,
+                            payload,
+                            desc,
+                            sub.version,
+                            sub.is_be,
                         )
                     } else {
                         encode_monitor_data_response_payload(
-                            sub.ioid, subcmd, payload, sub.version, sub.is_be,
+                            sub.ioid,
+                            subcmd,
+                            payload,
+                            sub.version,
+                            sub.is_be,
                         )
                     };
                     to_send = Some((sub.conn_id, msg));
@@ -152,12 +170,7 @@ impl MonitorRegistry {
     }
 
     /// Remove a monitor subscription.
-    pub async fn remove_monitor_subscription(
-        &self,
-        conn_id: u64,
-        ioid: u32,
-        pv_name: &str,
-    ) {
+    pub async fn remove_monitor_subscription(&self, conn_id: u64, ioid: u32, pv_name: &str) {
         let mut monitors = self.monitors.lock().await;
         if let Some(list) = monitors.get_mut(pv_name) {
             list.retain(|s| s.conn_id != conn_id || s.ioid != ioid);

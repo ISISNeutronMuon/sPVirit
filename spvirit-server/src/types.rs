@@ -302,7 +302,7 @@ impl RecordInstance {
             }
         }
     }
-    // 
+    //
     pub fn nt_mut(&mut self) -> &mut NtScalar {
         self.data.nt_mut()
     }
@@ -487,18 +487,38 @@ impl RecordInstance {
                 match target {
                     ScalarValue::Bool(current) => {
                         let next = as_f64 != 0.0;
-                        if *current == next { false } else { *current = next; true }
+                        if *current == next {
+                            false
+                        } else {
+                            *current = next;
+                            true
+                        }
                     }
                     ScalarValue::I32(current) => {
                         let next = as_f64 as i32;
-                        if *current == next { false } else { *current = next; true }
+                        if *current == next {
+                            false
+                        } else {
+                            *current = next;
+                            true
+                        }
                     }
                     ScalarValue::F64(current) => {
-                        if (*current - as_f64).abs() < f64::EPSILON { false } else { *current = as_f64; true }
+                        if (*current - as_f64).abs() < f64::EPSILON {
+                            false
+                        } else {
+                            *current = as_f64;
+                            true
+                        }
                     }
                     ScalarValue::Str(current) => {
                         let next = as_f64.to_string();
-                        if *current == next { false } else { *current = next; true }
+                        if *current == next {
+                            false
+                        } else {
+                            *current = next;
+                            true
+                        }
                     }
                     _ => false,
                 }

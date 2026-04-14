@@ -1,4 +1,4 @@
-use spvirit_tools::{format_output, pvget, PvGetOptions, RenderOptions};
+use spvirit_tools::{PvGetOptions, RenderOptions, format_output, pvget};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

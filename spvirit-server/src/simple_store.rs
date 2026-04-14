@@ -6,12 +6,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::debug;
 
-use spvirit_codec::spvd_decode::{
-    DecodedValue, FieldDesc, FieldType, StructureDesc, TypeCode,
-};
+use spvirit_codec::spvd_decode::{DecodedValue, FieldDesc, FieldType, StructureDesc, TypeCode};
 use spvirit_types::{NtPayload, ScalarArrayValue, ScalarValue};
 
 use crate::apply::{
@@ -23,16 +21,13 @@ use crate::pvstore::PvStore;
 use crate::types::{RecordData, RecordInstance};
 
 /// Callback invoked after a PUT value is applied to a record.
-pub type OnPutCallback =
-    Arc<dyn Fn(&str, &DecodedValue) + Send + Sync>;
+pub type OnPutCallback = Arc<dyn Fn(&str, &DecodedValue) + Send + Sync>;
 
 /// Callback invoked by the scan scheduler; returns the new value for the PV.
-pub type ScanCallback =
-    Arc<dyn Fn(&str) -> ScalarValue + Send + Sync>;
+pub type ScanCallback = Arc<dyn Fn(&str) -> ScalarValue + Send + Sync>;
 
 /// Callback that computes a derived PV value from its input values.
-pub type LinkCallback =
-    Arc<dyn Fn(&[ScalarValue]) -> ScalarValue + Send + Sync>;
+pub type LinkCallback = Arc<dyn Fn(&[ScalarValue]) -> ScalarValue + Send + Sync>;
 
 /// A link from one or more input PVs to a computed output PV.
 pub(crate) struct LinkDef {
@@ -152,7 +147,9 @@ impl SimplePvStore {
                 let changed = entry.record.set_scalar_value(value, self.compute_alarms);
                 if changed {
                     let payload = entry.record.to_ntpayload();
-                    entry.subscribers.retain(|tx| tx.try_send(payload.clone()).is_ok());
+                    entry
+                        .subscribers
+                        .retain(|tx| tx.try_send(payload.clone()).is_ok());
                     Some(payload)
                 } else {
                     None
@@ -183,7 +180,9 @@ impl SimplePvStore {
                 let changed = entry.record.set_array_value(value);
                 if changed {
                     let payload = entry.record.to_ntpayload();
-                    entry.subscribers.retain(|tx| tx.try_send(payload.clone()).is_ok());
+                    entry
+                        .subscribers
+                        .retain(|tx| tx.try_send(payload.clone()).is_ok());
                     Some(payload)
                 } else {
                     None
@@ -214,7 +213,9 @@ impl SimplePvStore {
                 let changed = entry.record.set_nt_payload(payload);
                 if changed {
                     let payload = entry.record.to_ntpayload();
-                    entry.subscribers.retain(|tx| tx.try_send(payload.clone()).is_ok());
+                    entry
+                        .subscribers
+                        .retain(|tx| tx.try_send(payload.clone()).is_ok());
                     Some(payload)
                 } else {
                     None
@@ -490,12 +491,30 @@ fn nt_scalar_desc(sv: &ScalarValue) -> StructureDesc {
     StructureDesc {
         struct_id: Some("epics:nt/NTScalar:1.0".to_string()),
         fields: vec![
-            FieldDesc { name: "value".to_string(), field_type: FieldType::Scalar(tc) },
-            FieldDesc { name: "alarm".to_string(), field_type: FieldType::Structure(alarm_desc()) },
-            FieldDesc { name: "timeStamp".to_string(), field_type: FieldType::Structure(timestamp_desc()) },
-            FieldDesc { name: "display".to_string(), field_type: FieldType::Structure(display_desc()) },
-            FieldDesc { name: "control".to_string(), field_type: FieldType::Structure(control_desc()) },
-            FieldDesc { name: "valueAlarm".to_string(), field_type: FieldType::Structure(value_alarm_desc()) },
+            FieldDesc {
+                name: "value".to_string(),
+                field_type: FieldType::Scalar(tc),
+            },
+            FieldDesc {
+                name: "alarm".to_string(),
+                field_type: FieldType::Structure(alarm_desc()),
+            },
+            FieldDesc {
+                name: "timeStamp".to_string(),
+                field_type: FieldType::Structure(timestamp_desc()),
+            },
+            FieldDesc {
+                name: "display".to_string(),
+                field_type: FieldType::Structure(display_desc()),
+            },
+            FieldDesc {
+                name: "control".to_string(),
+                field_type: FieldType::Structure(control_desc()),
+            },
+            FieldDesc {
+                name: "valueAlarm".to_string(),
+                field_type: FieldType::Structure(value_alarm_desc()),
+            },
         ],
     }
 }
@@ -505,11 +524,26 @@ fn nt_scalar_array_desc(sav: &ScalarArrayValue) -> StructureDesc {
     StructureDesc {
         struct_id: Some("epics:nt/NTScalarArray:1.0".to_string()),
         fields: vec![
-            FieldDesc { name: "value".to_string(), field_type: FieldType::ScalarArray(tc) },
-            FieldDesc { name: "alarm".to_string(), field_type: FieldType::Structure(alarm_desc()) },
-            FieldDesc { name: "timeStamp".to_string(), field_type: FieldType::Structure(timestamp_desc()) },
-            FieldDesc { name: "display".to_string(), field_type: FieldType::Structure(display_desc()) },
-            FieldDesc { name: "control".to_string(), field_type: FieldType::Structure(control_desc()) },
+            FieldDesc {
+                name: "value".to_string(),
+                field_type: FieldType::ScalarArray(tc),
+            },
+            FieldDesc {
+                name: "alarm".to_string(),
+                field_type: FieldType::Structure(alarm_desc()),
+            },
+            FieldDesc {
+                name: "timeStamp".to_string(),
+                field_type: FieldType::Structure(timestamp_desc()),
+            },
+            FieldDesc {
+                name: "display".to_string(),
+                field_type: FieldType::Structure(display_desc()),
+            },
+            FieldDesc {
+                name: "control".to_string(),
+                field_type: FieldType::Structure(control_desc()),
+            },
         ],
     }
 }
@@ -518,9 +552,18 @@ fn alarm_desc() -> StructureDesc {
     StructureDesc {
         struct_id: Some("alarm_t".to_string()),
         fields: vec![
-            FieldDesc { name: "severity".to_string(), field_type: FieldType::Scalar(TypeCode::Int32) },
-            FieldDesc { name: "status".to_string(), field_type: FieldType::Scalar(TypeCode::Int32) },
-            FieldDesc { name: "message".to_string(), field_type: FieldType::String },
+            FieldDesc {
+                name: "severity".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Int32),
+            },
+            FieldDesc {
+                name: "status".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Int32),
+            },
+            FieldDesc {
+                name: "message".to_string(),
+                field_type: FieldType::String,
+            },
         ],
     }
 }
@@ -529,9 +572,18 @@ fn timestamp_desc() -> StructureDesc {
     StructureDesc {
         struct_id: Some("time_t".to_string()),
         fields: vec![
-            FieldDesc { name: "secondsPastEpoch".to_string(), field_type: FieldType::Scalar(TypeCode::Int64) },
-            FieldDesc { name: "nanoseconds".to_string(), field_type: FieldType::Scalar(TypeCode::Int32) },
-            FieldDesc { name: "userTag".to_string(), field_type: FieldType::Scalar(TypeCode::Int32) },
+            FieldDesc {
+                name: "secondsPastEpoch".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Int64),
+            },
+            FieldDesc {
+                name: "nanoseconds".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Int32),
+            },
+            FieldDesc {
+                name: "userTag".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Int32),
+            },
         ],
     }
 }
@@ -540,18 +592,39 @@ fn display_desc() -> StructureDesc {
     StructureDesc {
         struct_id: Some("display_t".to_string()),
         fields: vec![
-            FieldDesc { name: "limitLow".to_string(), field_type: FieldType::Scalar(TypeCode::Float64) },
-            FieldDesc { name: "limitHigh".to_string(), field_type: FieldType::Scalar(TypeCode::Float64) },
-            FieldDesc { name: "description".to_string(), field_type: FieldType::String },
-            FieldDesc { name: "units".to_string(), field_type: FieldType::String },
-            FieldDesc { name: "precision".to_string(), field_type: FieldType::Scalar(TypeCode::Int32) },
+            FieldDesc {
+                name: "limitLow".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Float64),
+            },
+            FieldDesc {
+                name: "limitHigh".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Float64),
+            },
+            FieldDesc {
+                name: "description".to_string(),
+                field_type: FieldType::String,
+            },
+            FieldDesc {
+                name: "units".to_string(),
+                field_type: FieldType::String,
+            },
+            FieldDesc {
+                name: "precision".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Int32),
+            },
             FieldDesc {
                 name: "form".to_string(),
                 field_type: FieldType::Structure(StructureDesc {
                     struct_id: Some("enum_t".to_string()),
                     fields: vec![
-                        FieldDesc { name: "index".to_string(), field_type: FieldType::Scalar(TypeCode::Int32) },
-                        FieldDesc { name: "choices".to_string(), field_type: FieldType::StringArray },
+                        FieldDesc {
+                            name: "index".to_string(),
+                            field_type: FieldType::Scalar(TypeCode::Int32),
+                        },
+                        FieldDesc {
+                            name: "choices".to_string(),
+                            field_type: FieldType::StringArray,
+                        },
                     ],
                 }),
             },
@@ -563,9 +636,18 @@ fn control_desc() -> StructureDesc {
     StructureDesc {
         struct_id: Some("control_t".to_string()),
         fields: vec![
-            FieldDesc { name: "limitLow".to_string(), field_type: FieldType::Scalar(TypeCode::Float64) },
-            FieldDesc { name: "limitHigh".to_string(), field_type: FieldType::Scalar(TypeCode::Float64) },
-            FieldDesc { name: "minStep".to_string(), field_type: FieldType::Scalar(TypeCode::Float64) },
+            FieldDesc {
+                name: "limitLow".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Float64),
+            },
+            FieldDesc {
+                name: "limitHigh".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Float64),
+            },
+            FieldDesc {
+                name: "minStep".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Float64),
+            },
         ],
     }
 }
@@ -574,16 +656,46 @@ fn value_alarm_desc() -> StructureDesc {
     StructureDesc {
         struct_id: Some("valueAlarm_t".to_string()),
         fields: vec![
-            FieldDesc { name: "active".to_string(), field_type: FieldType::Scalar(TypeCode::Boolean) },
-            FieldDesc { name: "lowAlarmLimit".to_string(), field_type: FieldType::Scalar(TypeCode::Float64) },
-            FieldDesc { name: "lowWarningLimit".to_string(), field_type: FieldType::Scalar(TypeCode::Float64) },
-            FieldDesc { name: "highWarningLimit".to_string(), field_type: FieldType::Scalar(TypeCode::Float64) },
-            FieldDesc { name: "highAlarmLimit".to_string(), field_type: FieldType::Scalar(TypeCode::Float64) },
-            FieldDesc { name: "lowAlarmSeverity".to_string(), field_type: FieldType::Scalar(TypeCode::Int32) },
-            FieldDesc { name: "lowWarningSeverity".to_string(), field_type: FieldType::Scalar(TypeCode::Int32) },
-            FieldDesc { name: "highWarningSeverity".to_string(), field_type: FieldType::Scalar(TypeCode::Int32) },
-            FieldDesc { name: "highAlarmSeverity".to_string(), field_type: FieldType::Scalar(TypeCode::Int32) },
-            FieldDesc { name: "hysteresis".to_string(), field_type: FieldType::Scalar(TypeCode::UInt8) },
+            FieldDesc {
+                name: "active".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Boolean),
+            },
+            FieldDesc {
+                name: "lowAlarmLimit".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Float64),
+            },
+            FieldDesc {
+                name: "lowWarningLimit".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Float64),
+            },
+            FieldDesc {
+                name: "highWarningLimit".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Float64),
+            },
+            FieldDesc {
+                name: "highAlarmLimit".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Float64),
+            },
+            FieldDesc {
+                name: "lowAlarmSeverity".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Int32),
+            },
+            FieldDesc {
+                name: "lowWarningSeverity".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Int32),
+            },
+            FieldDesc {
+                name: "highWarningSeverity".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Int32),
+            },
+            FieldDesc {
+                name: "highAlarmSeverity".to_string(),
+                field_type: FieldType::Scalar(TypeCode::Int32),
+            },
+            FieldDesc {
+                name: "hysteresis".to_string(),
+                field_type: FieldType::Scalar(TypeCode::UInt8),
+            },
         ],
     }
 }
@@ -745,9 +857,7 @@ mod tests {
         records.insert("TEST:AO".into(), make_ao("TEST:AO", 0.0));
         let store = SimplePvStore::new(records, HashMap::new(), vec![], false);
 
-        let val = DecodedValue::Structure(vec![
-            ("value".to_string(), DecodedValue::Float64(99.5)),
-        ]);
+        let val = DecodedValue::Structure(vec![("value".to_string(), DecodedValue::Float64(99.5))]);
         let result = store.put_value("TEST:AO", &val).await.unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, "TEST:AO");
@@ -856,20 +966,24 @@ mod tests {
         records.insert("TEST:NDA".into(), make_nt_ndarray("TEST:NDA"));
         let store = SimplePvStore::new(records, HashMap::new(), vec![], false);
 
-        assert!(store
-            .put_nt(
-                "TEST:AI",
-                NtPayload::Scalar(NtScalar::from_value(ScalarValue::F64(5.0))),
-            )
-            .await);
-        assert!(store
-            .put_nt(
-                "TEST:WF",
-                NtPayload::ScalarArray(NtScalarArray::from_value(ScalarArrayValue::F64(
-                    vec![3.0, 4.0],
-                ))),
-            )
-            .await);
+        assert!(
+            store
+                .put_nt(
+                    "TEST:AI",
+                    NtPayload::Scalar(NtScalar::from_value(ScalarValue::F64(5.0))),
+                )
+                .await
+        );
+        assert!(
+            store
+                .put_nt(
+                    "TEST:WF",
+                    NtPayload::ScalarArray(NtScalarArray::from_value(ScalarArrayValue::F64(vec![
+                        3.0, 4.0
+                    ],))),
+                )
+                .await
+        );
 
         let table = NtTable {
             labels: vec!["X".to_string(), "Y".to_string()],
@@ -887,7 +1001,11 @@ mod tests {
             alarm: None,
             time_stamp: None,
         };
-        assert!(store.put_nt("TEST:TBL", NtPayload::Table(table.clone())).await);
+        assert!(
+            store
+                .put_nt("TEST:TBL", NtPayload::Table(table.clone()))
+                .await
+        );
 
         let ndarray = NtNdArray {
             value: ScalarArrayValue::U8(vec![1, 2, 3, 4]),
@@ -912,16 +1030,22 @@ mod tests {
             time_stamp: None,
             display: None,
         };
-        assert!(store
-            .put_nt("TEST:NDA", NtPayload::NdArray(ndarray.clone()))
-            .await);
+        assert!(
+            store
+                .put_nt("TEST:NDA", NtPayload::NdArray(ndarray.clone()))
+                .await
+        );
 
-        assert!(!store
-            .put_nt(
-                "TEST:AI",
-                NtPayload::ScalarArray(NtScalarArray::from_value(ScalarArrayValue::F64(vec![1.0]))),
-            )
-            .await);
+        assert!(
+            !store
+                .put_nt(
+                    "TEST:AI",
+                    NtPayload::ScalarArray(NtScalarArray::from_value(ScalarArrayValue::F64(vec![
+                        1.0
+                    ]))),
+                )
+                .await
+        );
 
         match store.get_nt("TEST:TBL").await.unwrap() {
             NtPayload::Table(nt) => assert_eq!(nt, table),
@@ -941,7 +1065,10 @@ mod tests {
         let desc = store.get_descriptor("TEST:AI").await.unwrap();
         assert_eq!(desc.struct_id.as_deref(), Some("epics:nt/NTScalar:1.0"));
         let value_field = desc.field("value").unwrap();
-        assert!(matches!(value_field.field_type, FieldType::Scalar(TypeCode::Float64)));
+        assert!(matches!(
+            value_field.field_type,
+            FieldType::Scalar(TypeCode::Float64)
+        ));
     }
 
     #[tokio::test]
@@ -952,9 +1079,7 @@ mod tests {
 
         let mut rx = store.subscribe("TEST:AO").await.unwrap();
 
-        let val = DecodedValue::Structure(vec![
-            ("value".to_string(), DecodedValue::Float64(7.7)),
-        ]);
+        let val = DecodedValue::Structure(vec![("value".to_string(), DecodedValue::Float64(7.7))]);
         store.put_value("TEST:AO", &val).await.unwrap();
 
         let update = rx.recv().await.unwrap();
@@ -981,9 +1106,7 @@ mod tests {
         on_put.insert("CB:AO".into(), cb);
 
         let store = SimplePvStore::new(records, on_put, vec![], false);
-        let val = DecodedValue::Structure(vec![
-            ("value".to_string(), DecodedValue::Float64(1.0)),
-        ]);
+        let val = DecodedValue::Structure(vec![("value".to_string(), DecodedValue::Float64(1.0))]);
         store.put_value("CB:AO", &val).await.unwrap();
 
         // Give the spawned task time to run.

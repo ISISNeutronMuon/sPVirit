@@ -6,16 +6,16 @@ use std::time::{Duration, Instant};
 
 use argparse::{ArgumentParser, Store, StoreTrue};
 use chrono::Local;
-use get_if_addrs::{get_if_addrs, IfAddr};
+use get_if_addrs::{IfAddr, get_if_addrs};
+use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
-    Block, Borders, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation,
-    ScrollbarState, Table, Wrap,
+    Block, Borders, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
+    Wrap,
 };
-use ratatui::DefaultTerminal;
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
 
@@ -318,8 +318,7 @@ fn run_worker(udp_port: u16, bind_addr: Option<IpAddr>, evt_tx: Sender<WorkerEve
                     if !payload.found {
                         continue;
                     }
-                    let server_addr =
-                        decode_response_addr(payload.addr, payload.port, peer);
+                    let server_addr = decode_response_addr(payload.addr, payload.port, peer);
 
                     let pv_names = cid_cache.lookup(payload.seq, &payload.cids);
                     if pv_names.is_empty() {
@@ -425,9 +424,7 @@ impl SearchApp {
             paused: false,
             detail_scroll: 0,
             status: "Listening for PVA search traffic...".to_string(),
-            status_log: VecDeque::from(vec![
-                "Listening for PVA search traffic...".to_string(),
-            ]),
+            status_log: VecDeque::from(vec!["Listening for PVA search traffic...".to_string()]),
             last_error: None,
             total_search_events: 0,
             total_found_events: 0,
@@ -693,18 +690,25 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &SearchApp) {
         .split(outer[0]);
 
     // --- Left pane: PV search table ---
-    let header_row = Row::new(vec!["PV Name", "Searches", "Found", "Last Searched", "Last Found"])
-        .style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+    let header_row = Row::new(vec![
+        "PV Name",
+        "Searches",
+        "Found",
+        "Last Searched",
+        "Last Found",
+    ])
+    .style(
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    );
 
     let table_height = main[0].height.saturating_sub(3) as usize; // borders + header
     let scroll_offset = if table_height == 0 {
         0
     } else {
-        app.selected_index.saturating_sub(table_height.saturating_sub(1))
+        app.selected_index
+            .saturating_sub(table_height.saturating_sub(1))
     };
 
     let rows: Vec<Row> = app
@@ -751,11 +755,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &SearchApp) {
         format!(" [filter: {}]", app.filter)
     };
 
-    let pause_display = if app.paused {
-        " [PAUSED]"
-    } else {
-        ""
-    };
+    let pause_display = if app.paused { " [PAUSED]" } else { "" };
 
     let table_title = format!(
         "PV Searches ({} PVs) [sort: {}]{}{}",
@@ -783,8 +783,8 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &SearchApp) {
 
     // --- Scrollbar for table ---
     if app.sorted_keys.len() > table_height {
-        let mut scrollbar_state = ScrollbarState::new(app.sorted_keys.len())
-            .position(app.selected_index);
+        let mut scrollbar_state =
+            ScrollbarState::new(app.sorted_keys.len()).position(app.selected_index);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("↑"))
             .end_symbol(Some("↓"));
@@ -814,10 +814,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &SearchApp) {
             "Total searches: {}",
             entry.search_count
         )));
-        detail_lines.push(Line::from(format!(
-            "Total found: {}",
-            entry.found_count
-        )));
+        detail_lines.push(Line::from(format!("Total found: {}", entry.found_count)));
         detail_lines.push(Line::from(format!(
             "Last searched: {}",
             format_ago(entry.last_searched, now)
@@ -885,9 +882,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &SearchApp) {
     } else {
         detail_lines.push(Line::from("No PV selected"));
         detail_lines.push(Line::from(""));
-        detail_lines.push(Line::from(
-            "Use Up/Down to select a PV from the table.",
-        ));
+        detail_lines.push(Line::from("Use Up/Down to select a PV from the table."));
     }
 
     let detail_widget = Paragraph::new(Text::from(detail_lines))
@@ -1055,8 +1050,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Passive PVA search monitor — listens for PVA search requests and \
              responses on the network and displays observed PV names in a TUI.",
         );
-        ap.refer(&mut udp_port)
-            .add_option(&["--udp-port", "-p"], Store, "UDP search port (default 5076)");
+        ap.refer(&mut udp_port).add_option(
+            &["--udp-port", "-p"],
+            Store,
+            "UDP search port (default 5076)",
+        );
         ap.refer(&mut bind_addr).add_option(
             &["--bind-addr", "-b"],
             Store,

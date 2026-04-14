@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dns_lookup::lookup_host;
-use get_if_addrs::{get_if_addrs, IfAddr};
+use get_if_addrs::{IfAddr, get_if_addrs};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::io::AsyncWriteExt;
 use tokio::net::UdpSocket;
@@ -64,7 +64,10 @@ fn parse_search_target_ip(token: &str) -> Option<IpAddr> {
             if let Ok(addrs) = lookup_host(host) {
                 // Prefer IPv4 for backward compat, fall back to first IPv6
                 let addrs: Vec<IpAddr> = addrs.collect();
-                if let Some(ip) = addrs.iter().find(|ip| ip.is_ipv4()).copied()
+                if let Some(ip) = addrs
+                    .iter()
+                    .find(|ip| ip.is_ipv4())
+                    .copied()
                     .or_else(|| addrs.into_iter().next())
                 {
                     return Some(ip);
@@ -76,7 +79,10 @@ fn parse_search_target_ip(token: &str) -> Option<IpAddr> {
     if let Ok(addrs) = lookup_host(token) {
         // Prefer IPv4, fall back to first IPv6
         let addrs: Vec<IpAddr> = addrs.collect();
-        if let Some(ip) = addrs.iter().find(|ip| ip.is_ipv4()).copied()
+        if let Some(ip) = addrs
+            .iter()
+            .find(|ip| ip.is_ipv4())
+            .copied()
             .or_else(|| addrs.into_iter().next())
         {
             return Some(ip);
@@ -470,7 +476,10 @@ pub async fn search_pv(
             if debug_enabled {
                 debug!(
                     "pva search bind={} target={} server_port={} reply_port={}",
-                    actual_bind_addr, dest.ip(), udp_port, reply_port
+                    actual_bind_addr,
+                    dest.ip(),
+                    udp_port,
+                    reply_port
                 );
                 debug!("pva search seq={} cid={}", seq, cid);
                 debug!("pva search send {} bytes to {}", msg.len(), dest);
@@ -651,10 +660,9 @@ pub async fn search_pv_tcp(
 ) -> Result<SocketAddr, PvGetError> {
     let deadline = tokio::time::Instant::now() + timeout_dur;
 
-    let mut stream =
-        tokio::time::timeout(timeout_dur, tokio::net::TcpStream::connect(name_server))
-            .await
-            .map_err(|_| PvGetError::Timeout("name server connect"))??;
+    let mut stream = tokio::time::timeout(timeout_dur, tokio::net::TcpStream::connect(name_server))
+        .await
+        .map_err(|_| PvGetError::Timeout("name server connect"))??;
 
     let mut version = 2u8;
     let mut is_be = false;
@@ -738,8 +746,7 @@ pub async fn search_pv_tcp(
                 if !payload.cids.is_empty() && !payload.cids.contains(&cid) {
                     continue;
                 }
-                let addr =
-                    decode_search_response_addr(payload.addr, payload.port, name_server);
+                let addr = decode_search_response_addr(payload.addr, payload.port, name_server);
                 if debug_enabled {
                     debug!(
                         "pva tcp search response from name_server={}: {}",
@@ -965,7 +972,11 @@ pub async fn discover_servers(
             if debug_enabled {
                 debug!(
                     "pva discover bind={} target={} server_port={} reply_port={} seq={}",
-                    actual_bind_addr, dest.ip(), udp_port, reply_port, seq
+                    actual_bind_addr,
+                    dest.ip(),
+                    udp_port,
+                    reply_port,
+                    seq
                 );
             }
             if let Err(err) = socket.send_to(&msg, dest).await {
@@ -1172,13 +1183,22 @@ mod tests {
     #[test]
     fn parse_name_servers_ip_with_port() {
         let addrs = parse_name_servers("192.168.1.10:5075");
-        assert_eq!(addrs, vec!["192.168.1.10:5075".parse::<SocketAddr>().unwrap()]);
+        assert_eq!(
+            addrs,
+            vec!["192.168.1.10:5075".parse::<SocketAddr>().unwrap()]
+        );
     }
 
     #[test]
     fn parse_name_servers_ip_without_port_defaults_to_5075() {
         let addrs = parse_name_servers("10.0.0.1");
-        assert_eq!(addrs, vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 5075)]);
+        assert_eq!(
+            addrs,
+            vec![SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+                5075
+            )]
+        );
     }
 
     #[test]
@@ -1193,7 +1213,10 @@ mod tests {
     fn parse_name_servers_multiple_space_separated() {
         let addrs = parse_name_servers("10.0.0.1 10.0.0.2:5075");
         assert_eq!(addrs.len(), 2);
-        assert_eq!(addrs[0], SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 5075));
+        assert_eq!(
+            addrs[0],
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 5075)
+        );
         assert_eq!(addrs[1], "10.0.0.2:5075".parse::<SocketAddr>().unwrap());
     }
 
@@ -1214,20 +1237,29 @@ mod tests {
         let addrs = parse_name_servers("10.0.0.1:5075, 10.0.0.2  ,  10.0.0.3:9999");
         assert_eq!(addrs.len(), 3);
         assert_eq!(addrs[0], "10.0.0.1:5075".parse::<SocketAddr>().unwrap());
-        assert_eq!(addrs[1], SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)), 5075));
+        assert_eq!(
+            addrs[1],
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)), 5075)
+        );
         assert_eq!(addrs[2], "10.0.0.3:9999".parse::<SocketAddr>().unwrap());
     }
 
     #[test]
     fn parse_name_servers_ipv6_with_port() {
         let addrs = parse_name_servers("[::1]:5075");
-        assert_eq!(addrs, vec![SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 5075)]);
+        assert_eq!(
+            addrs,
+            vec![SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 5075)]
+        );
     }
 
     #[test]
     fn parse_name_servers_ipv6_without_port() {
         let addrs = parse_name_servers("::1");
-        assert_eq!(addrs, vec![SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 5075)]);
+        assert_eq!(
+            addrs,
+            vec![SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 5075)]
+        );
     }
 
     #[test]

@@ -417,8 +417,7 @@ impl PvaStateTracker {
             );
         } else {
             // We missed the request - try search cache first, then create placeholder
-            let pv_name = cached_pv_name
-                .unwrap_or_else(|| format!("<unknown:cid={}>", cid));
+            let pv_name = cached_pv_name.unwrap_or_else(|| format!("<unknown:cid={}>", cid));
             let is_resolved = !pv_name.starts_with("<unknown");
             debug!(
                 "CREATE_CHANNEL response without request: cid={}, sid={}, resolved={}",
@@ -539,13 +538,16 @@ impl PvaStateTracker {
                 // when this is the very first operation (no other ops yet).
                 // If there are already other operations, this is likely a
                 // multiplexed connection and the fallback would be wrong.
-                conn.channels_by_cid.values().next()
+                conn.channels_by_cid
+                    .values()
+                    .next()
                     .map(|ch| ch.pv_name.clone())
                     .filter(|n| !n.starts_with("<unknown"))
             } else {
                 None
             };
-            conn.operations.insert(ioid, OperationState::new(sid, ioid, command, pv_name));
+            conn.operations
+                .insert(ioid, OperationState::new(sid, ioid, command, pv_name));
             created_placeholder = true;
         }
 
@@ -559,7 +561,10 @@ impl PvaStateTracker {
         // Deferred stat update — can't touch self.stats while conn borrows self
         if created_placeholder {
             self.stats.operations_created += 1;
-            debug!("Auto-created placeholder operation for mid-stream traffic: sid={}, ioid={}, cmd={}", sid, ioid, command);
+            debug!(
+                "Auto-created placeholder operation for mid-stream traffic: sid={}, ioid={}, cmd={}",
+                sid, ioid, command
+            );
         }
     }
 
@@ -792,7 +797,9 @@ impl PvaStateTracker {
                     return true;
                 }
                 // Any channel not fully established → mid-stream
-                conn.channels_by_cid.values().any(|ch| !ch.fully_established)
+                conn.channels_by_cid
+                    .values()
+                    .any(|ch| !ch.fully_established)
             })
             .unwrap_or(false)
     }
@@ -1122,8 +1129,11 @@ mod tests {
         // Unknown ioids should NOT resolve to CAPTURED:PV
         for ioid in 2..=10 {
             let pv = tracker.resolve_pv_name(&key, 0, ioid);
-            assert_eq!(pv, None,
-                "ioid={} should not resolve to the single captured channel", ioid);
+            assert_eq!(
+                pv, None,
+                "ioid={} should not resolve to the single captured channel",
+                ioid
+            );
         }
     }
 
@@ -1145,8 +1155,10 @@ mod tests {
         tracker.on_op_activity(&key, 0, 2, 13);
 
         let pv = tracker.resolve_pv_name(&key, 0, 2);
-        assert_eq!(pv, None,
-            "placeholder for ioid=2 should not inherit PV from single-channel fallback");
+        assert_eq!(
+            pv, None,
+            "placeholder for ioid=2 should not inherit PV from single-channel fallback"
+        );
     }
 
     #[test]
@@ -1160,7 +1172,7 @@ mod tests {
             (101, "MOTOR:Y:POSITION".to_string()),
             (102, "TEMP:SENSOR:1".to_string()),
         ];
-        tracker.on_search(& pv_requests, Some(client_ip));
+        tracker.on_search(&pv_requests, Some(client_ip));
 
         // Resolve CIDs from a SEARCH_RESPONSE
         let resolved = tracker.resolve_search_cids(&[100, 101, 102], Some(client_ip));
@@ -1175,9 +1187,7 @@ mod tests {
         let mut tracker = PvaStateTracker::with_defaults();
         let client_ip: IpAddr = "192.168.1.10".parse().unwrap();
 
-        let pv_requests = vec![
-            (100, "MOTOR:X:POSITION".to_string()),
-        ];
+        let pv_requests = vec![(100, "MOTOR:X:POSITION".to_string())];
         tracker.on_search(&pv_requests, Some(client_ip));
 
         // Resolve with some CIDs that were never cached
@@ -1212,10 +1222,7 @@ mod tests {
         let client_ip: IpAddr = "192.168.1.10".parse().unwrap();
 
         // Cache with a known client IP
-        tracker.on_search(
-            &[(42, "SOME:PV:NAME".to_string())],
-            Some(client_ip),
-        );
+        tracker.on_search(&[(42, "SOME:PV:NAME".to_string())], Some(client_ip));
 
         // Resolve without knowing the client IP (flat fallback)
         let resolved = tracker.resolve_search_cids(&[42], None);
@@ -1248,10 +1255,7 @@ mod tests {
         let client_ip: IpAddr = "192.168.1.10".parse().unwrap();
 
         tracker.on_search(
-            &[
-                (1, "PV:A".to_string()),
-                (2, "PV:B".to_string()),
-            ],
+            &[(1, "PV:A".to_string()), (2, "PV:B".to_string())],
             Some(client_ip),
         );
 
@@ -1340,10 +1344,7 @@ mod tests {
 
         // SEARCH arrives with the CID→PV mapping
         let client_ip: IpAddr = "192.168.1.1".parse().unwrap();
-        tracker.on_search(
-            &[(100, "RESOLVED:PV".to_string())],
-            Some(client_ip),
-        );
+        tracker.on_search(&[(100, "RESOLVED:PV".to_string())], Some(client_ip));
 
         // Channel should now be resolved
         assert_eq!(

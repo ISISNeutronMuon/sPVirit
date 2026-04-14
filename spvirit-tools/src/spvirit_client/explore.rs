@@ -6,8 +6,7 @@ use tokio::net::TcpStream;
 use tokio::time::{interval, timeout};
 
 use crate::spvirit_client::client::{
-    build_client_validation, encode_create_channel_request,
-    encode_monitor_request, pvget,
+    build_client_validation, encode_create_channel_request, encode_monitor_request, pvget,
 };
 use crate::spvirit_client::transport::{read_packet, read_until};
 use crate::spvirit_client::types::{PvGetError, PvGetOptions, PvGetResult};
@@ -147,7 +146,7 @@ where
         _ => {
             return Err(PvGetError::Protocol(
                 "unexpected create_channel response".to_string(),
-            ))
+            ));
         }
     };
 
@@ -182,7 +181,7 @@ where
         _ => {
             return Err(PvGetError::Protocol(
                 "unexpected monitor init response".to_string(),
-            ))
+            ));
         }
     };
 

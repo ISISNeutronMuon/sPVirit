@@ -15,15 +15,15 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 
 use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
-use spvirit_codec::spvirit_encode::encode_rpc_request;
 use spvirit_codec::spvd_decode::{
-    extract_nt_scalar_value, DecodedValue, FieldDesc, FieldType, PvdDecoder, StructureDesc,
+    DecodedValue, FieldDesc, FieldType, PvdDecoder, StructureDesc, extract_nt_scalar_value,
 };
 use spvirit_codec::spvd_encode::{encode_string_pvd, encode_structure_desc};
+use spvirit_codec::spvirit_encode::encode_rpc_request;
 
 use crate::client::{
-    build_client_validation, encode_get_field_request, encode_get_request, establish_channel,
-    pvget, ChannelConn,
+    ChannelConn, build_client_validation, encode_get_field_request, encode_get_request,
+    establish_channel, pvget,
 };
 use crate::transport::{read_packet, read_until};
 use crate::types::{PvGetError, PvOptions};
@@ -318,9 +318,9 @@ async fn list_pvs_via_server_rpc_channel(
     })
     .await?;
     let mut pkt = PvaPacket::new(&init_resp);
-    let init_cmd = pkt.decode_payload().ok_or(PvGetError::Protocol(
-        "rpc init decode failed".to_string(),
-    ))?;
+    let init_cmd = pkt
+        .decode_payload()
+        .ok_or(PvGetError::Protocol("rpc init decode failed".to_string()))?;
     if let PvaPacketCommand::Op(op) = init_cmd {
         if op.status.as_ref().is_some_and(|s| s.is_error()) {
             let detail = op
@@ -424,8 +424,7 @@ pub async fn list_pvs_via_server_get(
         } = establish_channel(server_addr, &get_opts).await?;
 
         let ioid = 1u32;
-        let init_req =
-            encode_get_request(sid, ioid, 0x08, &PV_REQUEST_EMPTY, version, is_be);
+        let init_req = encode_get_request(sid, ioid, 0x08, &PV_REQUEST_EMPTY, version, is_be);
         stream.write_all(&init_req).await?;
         let init_resp = read_until(&mut stream, opts.timeout, |cmd| match cmd {
             PvaPacketCommand::Op(op) => {
@@ -524,10 +523,7 @@ pub async fn list_pvs_via_server_get(
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 /// List PV names from a server using `__pvlist` GET (preferred method).
-pub async fn pvlist(
-    opts: &PvOptions,
-    server_addr: SocketAddr,
-) -> Result<Vec<String>, PvGetError> {
+pub async fn pvlist(opts: &PvOptions, server_addr: SocketAddr) -> Result<Vec<String>, PvGetError> {
     list_pvs_via_pvlist(opts, server_addr).await
 }
 
@@ -616,7 +612,7 @@ where
                         ));
                         match list_pvs_via_server_get(opts, addr).await {
                             Ok(names) => {
-                                return Ok((normalize_pv_names(names), PvListSource::ServerGet))
+                                return Ok((normalize_pv_names(names), PvListSource::ServerGet));
                             }
                             Err(get_err) => {
                                 let get_field_msg = get_field_result

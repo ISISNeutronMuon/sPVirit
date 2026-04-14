@@ -3,7 +3,7 @@ use std::f64::consts::PI;
 use argparse::{ArgumentParser, Store};
 use serde_json::Value;
 use tokio::runtime::Runtime;
-use tokio::time::{interval, Instant};
+use tokio::time::{Instant, interval};
 
 use spvirit_client::client_from_opts;
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;

@@ -11,8 +11,10 @@ pub fn workspace_bin(name: &str) -> String {
     let ext = if cfg!(windows) { ".exe" } else { "" };
     let test_exe = std::env::current_exe().expect("cannot locate test executable");
     test_exe
-        .parent().unwrap()
-        .parent().unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .join(format!("{name}{ext}"))
         .to_string_lossy()
         .to_string()
@@ -88,11 +90,7 @@ pub fn run_command_with_timeout(
                 if started_at.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!(
-                        "{}: timed out after {:?}",
-                        label,
-                        timeout,
-                    ));
+                    return Err(format!("{}: timed out after {:?}", label, timeout,));
                 }
                 thread::sleep(Duration::from_millis(50));
             }
