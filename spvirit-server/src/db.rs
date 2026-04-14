@@ -543,7 +543,7 @@ fn to_record(record: &DbRecord) -> Option<RecordInstance> {
                 indx: fields.get("INDX").and_then(|v| parse_usize(v)).unwrap_or(0),
             }
         }
-        RecordType::NtTable | RecordType::NtNdArray => {
+        RecordType::NtTable | RecordType::NtNdArray | RecordType::Mbbi | RecordType::Mbbo | RecordType::Generic => {
             eprintln!(
                 "Record '{}': type '{}' is not a standard EPICS Base record type and cannot be loaded from .db files",
                 record.name, record.record_type

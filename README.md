@@ -462,6 +462,60 @@ When to use record/value APIs (`set_value` / `set_array_value`):
 - You want less boilerplate and softIOC-style ergonomics.
 - You do not need to manually manage NT metadata fields each update.
 
+### Building the Python wrapper (`spvirit-py`)
+
+The `spvirit-py` crate provides Python bindings via [PyO3](https://pyo3.rs) and is built with [maturin](https://www.maturin.rs/).
+
+#### Prerequisites
+- Python 3.9+
+- Rust toolchain (see above)
+- `maturin` (`pip install maturin`)
+
+#### Development build (editable install)
+```bash
+cd spvirit/spvirit-py
+python -m venv .venv
+
+# Linux / macOS
+source .venv/bin/activate
+# Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+
+pip install maturin
+maturin develop --release
+```
+
+After `maturin develop` the `spvirit` module is importable from the venv:
+```python
+import spvirit
+
+# Client
+client = spvirit.ClientBuilder().build()
+result = client.pvget("MY:PV:NAME")
+print(result)
+
+# Server
+builder = spvirit.ServerBuilder()
+builder.ai("SIM:TEMPERATURE", 22.5)
+builder.ao("SIM:SETPOINT", 25.0)
+server = builder.build()
+server.run()
+```
+
+#### Building a wheel for distribution
+```bash
+maturin build --release
+# wheel is written to target/wheels/
+pip install target/wheels/spvirit_py-*.whl
+```
+
+#### Running the Python examples
+```bash
+maturin develop --release
+python spvirit-py/examples/demo_server.py
+python spvirit-py/examples/demo_nt_access.py
+```
+
 ### Running the examples
 
 All examples can be run directly from the repo:

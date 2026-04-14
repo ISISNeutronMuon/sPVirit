@@ -22,6 +22,9 @@ pub enum RecordType {
     SubArray,
     NtTable,
     NtNdArray,
+    Mbbi,
+    Mbbo,
+    Generic,
 }
 
 impl RecordType {
@@ -37,12 +40,14 @@ impl RecordType {
             "aai" => Some(Self::Aai),
             "aao" => Some(Self::Aao),
             "subarray" => Some(Self::SubArray),
+            "mbbi" | "ntenum" => Some(Self::Mbbi),
+            "mbbo" => Some(Self::Mbbo),
             _ => None,
         }
     }
 
     pub fn is_output(&self) -> bool {
-        matches!(self, Self::Ao | Self::Bo | Self::StringOut | Self::Aao)
+        matches!(self, Self::Ao | Self::Bo | Self::StringOut | Self::Aao | Self::Mbbo)
     }
 }
 
@@ -200,6 +205,19 @@ pub enum RecordData {
         out: Option<LinkExpr>,
         omsl: OutputMode,
     },
+    NtEnum {
+        nt: NtEnum,
+        inp: Option<LinkExpr>,
+        out: Option<LinkExpr>,
+        omsl: OutputMode,
+    },
+    Generic {
+        struct_id: String,
+        fields: Vec<(String, PvValue)>,
+        inp: Option<LinkExpr>,
+        out: Option<LinkExpr>,
+        omsl: OutputMode,
+    },
 }
 
 impl RecordData {
@@ -241,6 +259,13 @@ impl RecordData {
             | Self::SubArray { nt, .. } => NtPayload::ScalarArray(nt.clone()),
             Self::NtTable { nt, .. } => NtPayload::Table(nt.clone()),
             Self::NtNdArray { nt, .. } => NtPayload::NdArray(nt.clone()),
+            Self::NtEnum { nt, .. } => NtPayload::Enum(nt.clone()),
+            Self::Generic {
+                struct_id, fields, ..
+            } => NtPayload::Generic {
+                struct_id: struct_id.clone(),
+                fields: fields.clone(),
+            },
         }
     }
 }
@@ -264,6 +289,8 @@ impl RecordInstance {
             RecordData::Waveform { .. } => true,
             RecordData::NtTable { .. } => true,
             RecordData::NtNdArray { .. } => true,
+            RecordData::NtEnum { .. } => true,
+            RecordData::Generic { .. } => true,
             _ => false,
         }
     }
@@ -598,6 +625,31 @@ impl RecordInstance {
                     false
                 } else {
                     *nt = next;
+                    true
+                }
+            }
+            (RecordData::NtEnum { nt, .. }, NtPayload::Enum(next)) => {
+                if *nt == next {
+                    false
+                } else {
+                    *nt = next;
+                    true
+                }
+            }
+            (
+                RecordData::Generic {
+                    struct_id, fields, ..
+                },
+                NtPayload::Generic {
+                    struct_id: next_id,
+                    fields: next_fields,
+                },
+            ) => {
+                if *struct_id == next_id && *fields == next_fields {
+                    false
+                } else {
+                    *struct_id = next_id;
+                    *fields = next_fields;
                     true
                 }
             }

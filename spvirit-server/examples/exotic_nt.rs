@@ -4,44 +4,110 @@ use spvirit_server::{
     DbCommonState, OutputMode, PvaServer, RecordData, RecordInstance, RecordType,
 };
 use spvirit_types::{
-    NdCodec, NdDimension, NtNdArray, NtPayload, NtScalar, NtTable, NtTableColumn, ScalarArrayValue,
-    ScalarValue,
+    NdCodec, NdDimension, NtEnum, NtNdArray, NtPayload, NtTable, NtTableColumn, PvValue,
+    ScalarArrayValue, ScalarValue,
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mode = make_mode_enum_record();
+    // ── Build using the high-level builder for NtEnum and Generic ────────
+
+    let server = PvaServer::builder()
+        .mbbi(
+            "SIM:STATE",
+            vec![
+                "Idle".to_string(),
+                "Running".to_string(),
+                "Error".to_string(),
+            ],
+            0,
+        )
+        .mbbo(
+            "SIM:MODE",
+            vec![
+                "Standby".to_string(),
+                "Acquire".to_string(),
+                "Calibrate".to_string(),
+            ],
+            0,
+        )
+        .generic(
+            "SIM:POSITION",
+            "demo:custom/Position:1.0",
+            vec![
+                ("x".to_string(), PvValue::Scalar(ScalarValue::F64(0.0))),
+                ("y".to_string(), PvValue::Scalar(ScalarValue::F64(0.0))),
+                (
+                    "label".to_string(),
+                    PvValue::Scalar(ScalarValue::Str("origin".to_string())),
+                ),
+            ],
+        )
+        .build();
+
+    let store = server.store().clone();
+
+    // ── Manually insert exotic NT types that don't have builder methods ──
+
     let table = make_table_record();
     let image = make_ndarray_record();
 
-    let server = PvaServer::builder().build();
-    let store = server.store().clone();
-
-    // since we dont have a RecordBuilder for these exotic NT types yet, we insert them directly as RecordInstances.
-
-    store.insert("SIM:MODE".into(), mode).await;
     store.insert("SIM:TBL".into(), table).await;
     store.insert("SIM:IMG".into(), image).await;
 
     tokio::spawn(async move {
         let mut tick = 0u64;
         loop {
-            // Enum-like NTScalar using i32 + display choices.
+            // ── NtEnum — cycles through states ──────────────────────
             let mode_idx = (tick % 3) as i32;
-            let mut mode_nt = NtScalar::from_value(ScalarValue::I32(mode_idx));
-            mode_nt.display_form_index = mode_idx;
-            mode_nt.display_form_choices = vec![
-                "Standby".to_string(),
-                "Acquire".to_string(),
-                "Calibrate".to_string(),
-            ];
-            mode_nt.display_description =
-                format!("Mode={}", mode_nt.display_form_choices[mode_idx as usize]);
-            store.put_nt("SIM:MODE", NtPayload::Scalar(mode_nt)).await;
+            let mode_nt = NtEnum::new(
+                mode_idx,
+                vec![
+                    "Standby".to_string(),
+                    "Acquire".to_string(),
+                    "Calibrate".to_string(),
+                ],
+            );
+            store
+                .put_nt("SIM:MODE", NtPayload::Enum(mode_nt))
+                .await;
 
-            // NTTable with two columns that change over time.
-            let x = (0..8).map(|i| i as f64).collect::<Vec<_>>();
-            let y = x
+            let state_idx = (tick % 3) as i32;
+            let state_nt = NtEnum::new(
+                state_idx,
+                vec![
+                    "Idle".to_string(),
+                    "Running".to_string(),
+                    "Error".to_string(),
+                ],
+            );
+            store
+                .put_nt("SIM:STATE", NtPayload::Enum(state_nt))
+                .await;
+
+            // ── Generic structure — updating position ────────────────
+            let x = tick as f64 * 0.1;
+            let y = (tick as f64 * 0.3).sin();
+            store
+                .put_nt(
+                    "SIM:POSITION",
+                    NtPayload::Generic {
+                        struct_id: "demo:custom/Position:1.0".to_string(),
+                        fields: vec![
+                            ("x".to_string(), PvValue::Scalar(ScalarValue::F64(x))),
+                            ("y".to_string(), PvValue::Scalar(ScalarValue::F64(y))),
+                            (
+                                "label".to_string(),
+                                PvValue::Scalar(ScalarValue::Str(format!("tick-{tick}"))),
+                            ),
+                        ],
+                    },
+                )
+                .await;
+
+            // ── NTTable — two columns that change over time ──────────
+            let xs = (0..8).map(|i| i as f64).collect::<Vec<_>>();
+            let ys = xs
                 .iter()
                 .map(|v| (v * 0.7 + tick as f64 * 0.15).sin())
                 .collect::<Vec<_>>();
@@ -50,11 +116,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 columns: vec![
                     NtTableColumn {
                         name: "x".to_string(),
-                        values: ScalarArrayValue::F64(x),
+                        values: ScalarArrayValue::F64(xs),
                     },
                     NtTableColumn {
                         name: "y".to_string(),
-                        values: ScalarArrayValue::F64(y),
+                        values: ScalarArrayValue::F64(ys),
                     },
                 ],
                 descriptor: Some("SIM table demo".to_string()),
@@ -63,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             store.put_nt("SIM:TBL", NtPayload::Table(table_nt)).await;
 
-            // NTNDArray with a tiny 4x4 image.
+            // ── NTNDArray — tiny 4x4 image ───────────────────────────
             let pixels = (0..16)
                 .map(|i| (((i as i32 + tick as i32) % 16) * 16) as u8)
                 .collect::<Vec<_>>();
@@ -103,8 +169,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .put_nt("SIM:IMG", NtPayload::NdArray(ndarray_nt))
                 .await;
 
+            // ── Print snapshots ──────────────────────────────────────
             if let Some(snapshot) = store.get_nt("SIM:MODE").await {
                 println!("SIM:MODE => {snapshot:?}");
+            }
+            if let Some(snapshot) = store.get_nt("SIM:STATE").await {
+                println!("SIM:STATE => {snapshot:?}");
+            }
+            if let Some(snapshot) = store.get_nt("SIM:POSITION").await {
+                println!("SIM:POSITION => {snapshot:?}");
             }
 
             tick += 1;
@@ -113,36 +186,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     server.run().await
-}
-
-fn make_mode_enum_record() -> RecordInstance {
-    let mut nt = NtScalar::from_value(ScalarValue::I32(0));
-    nt.display_form_index = 0;
-    nt.display_form_choices = vec![
-        "Standby".to_string(),
-        "Acquire".to_string(),
-        "Calibrate".to_string(),
-    ];
-    nt.display_description = "Enum-like mode selector".to_string();
-
-    RecordInstance {
-        name: "SIM:MODE".to_string(),
-        record_type: RecordType::Ao,
-        common: DbCommonState::default(),
-        data: RecordData::Ao {
-            nt,
-            out: None,
-            dol: None,
-            omsl: OutputMode::Supervisory,
-            drvl: None,
-            drvh: None,
-            oroc: None,
-            siml: None,
-            siol: None,
-            simm: false,
-        },
-        raw_fields: HashMap::new(),
-    }
 }
 
 fn make_table_record() -> RecordInstance {

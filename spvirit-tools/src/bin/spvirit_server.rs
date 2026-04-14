@@ -2530,6 +2530,9 @@ fn process_record_body(
                 }
             }
         }
+        RecordData::NtEnum { .. } | RecordData::Generic { .. } => {
+            // NtEnum and Generic records do not participate in link processing.
+        }
     }
 }
 
@@ -2800,6 +2803,32 @@ fn apply_put_update(
         | RecordData::SubArray { nt, nord, .. } => apply_scalar_array_put(nt, nord, value),
         RecordData::NtTable { nt, .. } => apply_table_put(nt, value),
         RecordData::NtNdArray { nt, .. } => apply_ndarray_put(nt, value),
+        RecordData::NtEnum { nt, .. } => {
+            let DecodedValue::Structure(fields) = value else {
+                return false;
+            };
+            let mut changed = false;
+            for (name, val) in fields {
+                if name == "value" {
+                    let idx = match val {
+                        DecodedValue::Int32(v) => Some(*v),
+                        DecodedValue::Int64(v) => Some(*v as i32),
+                        DecodedValue::Int16(v) => Some(*v as i32),
+                        DecodedValue::Int8(v) => Some(*v as i32),
+                        DecodedValue::Float64(v) => Some(*v as i32),
+                        _ => None,
+                    };
+                    if let Some(idx) = idx {
+                        if nt.index != idx {
+                            nt.index = idx;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            changed
+        }
+        RecordData::Generic { .. } => false,
     }
 }
 

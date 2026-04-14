@@ -22,7 +22,7 @@ use std::time::Duration;
 use regex::Regex;
 use tracing::info;
 
-use spvirit_types::{NtScalar, NtScalarArray, ScalarArrayValue, ScalarValue};
+use spvirit_types::{NtEnum, NtScalar, NtScalarArray, PvValue, ScalarArrayValue, ScalarValue};
 
 use crate::db::{load_db, parse_db};
 use crate::handler::PvListMode;
@@ -167,6 +167,85 @@ impl PvaServerBuilder {
                     ftvl,
                     nelm,
                     nord: nelm,
+                },
+                raw_fields: HashMap::new(),
+            },
+        );
+        self
+    }
+
+    /// Add an `mbbi` (multi-bit binary input, read-only) NTEnum record.
+    pub fn mbbi(
+        mut self,
+        name: impl Into<String>,
+        choices: Vec<String>,
+        initial: i32,
+    ) -> Self {
+        let name = name.into();
+        self.records.insert(
+            name.clone(),
+            RecordInstance {
+                name: name.clone(),
+                record_type: RecordType::Mbbi,
+                common: DbCommonState::default(),
+                data: RecordData::NtEnum {
+                    nt: NtEnum::new(initial, choices),
+                    inp: None,
+                    out: None,
+                    omsl: OutputMode::Supervisory,
+                },
+                raw_fields: HashMap::new(),
+            },
+        );
+        self
+    }
+
+    /// Add an `mbbo` (multi-bit binary output, writable) NTEnum record.
+    pub fn mbbo(
+        mut self,
+        name: impl Into<String>,
+        choices: Vec<String>,
+        initial: i32,
+    ) -> Self {
+        let name = name.into();
+        self.records.insert(
+            name.clone(),
+            RecordInstance {
+                name: name.clone(),
+                record_type: RecordType::Mbbo,
+                common: DbCommonState::default(),
+                data: RecordData::NtEnum {
+                    nt: NtEnum::new(initial, choices),
+                    inp: None,
+                    out: None,
+                    omsl: OutputMode::Supervisory,
+                },
+                raw_fields: HashMap::new(),
+            },
+        );
+        self
+    }
+
+    /// Add a generic structure record with a custom struct ID and fields.
+    pub fn generic(
+        mut self,
+        name: impl Into<String>,
+        struct_id: impl Into<String>,
+        fields: Vec<(String, PvValue)>,
+    ) -> Self {
+        let name = name.into();
+        self.records.insert(
+            name.clone(),
+            RecordInstance {
+                name: name.clone(),
+                record_type: RecordType::Generic,
+                common: DbCommonState::default(),
+                data: RecordData::Generic {
+                    struct_id: struct_id.into(),
+                    fields,
+                    inp: None,
+                    out: None,
+                    omsl: OutputMode::Supervisory,
                 },
                 raw_fields: HashMap::new(),
             },

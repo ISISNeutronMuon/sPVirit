@@ -62,13 +62,20 @@ width, height = 16, 16
 pixels = [float(i % 256) for i in range(width * height)]
 builder.nt_ndarray("SIM:IMAGE", pixels, [(width, width), (height, height)])
 
-# ── Enum equivalent — NtScalar with display_form_choices ──────────────────────
-# PVA "enum" is modelled as an integer NtScalar whose display.form.choices
-# lists the allowed state names.  Clients (e.g. PyDM, CS-Studio) render
-# the value as a drop-down or label from the choices list.
+# ── NtEnum — real enum records via mbbi / mbbo ────────────────────────────────
+# Creates proper NTEnum PVs with choices. Clients see the standard
+# epics:nt/NTEnum:1.0 structure with {index, choices}.
 
-builder.ai("SIM:ENUM_RO", 0)    # read-only enum state
-builder.ao("SIM:ENUM_RW", 0)    # writable enum state
+builder.mbbi("SIM:STATE", ["Idle", "Running", "Paused", "Error"], 0)  # read-only
+builder.mbbo("SIM:MODE", ["Standby", "Acquire", "Calibrate"], 0)      # writable
+
+# ── Generic structure — custom user-defined type ──────────────────────────────
+
+builder.generic("SIM:METADATA", "demo:custom/Meta:1.0", {
+    "author": "spvirit",
+    "version": 1,
+    "rating": 9.5,
+})
 
 # ── NT-level PVs — full metadata set via put_nt after build ───────────────────
 # These records are created with a placeholder value; after .build() we
@@ -95,13 +102,13 @@ def on_enable(pv_name, value):
 
 builder.on_put("SIM:ENABLE", on_enable)
 
-def on_enum_rw(pv_name, value):
+def on_state(pv_name, value):
     states = ["Idle", "Running", "Paused", "Error"]
     idx = int(value) if isinstance(value, (int, float)) else 0
     label = states[idx] if 0 <= idx < len(states) else "?"
-    print(f"[enum] {pv_name} = {idx} ({label})")
+    print(f"[state] {pv_name} = {idx} ({label})")
 
-builder.on_put("SIM:ENUM_RW", on_enum_rw)
+builder.on_put("SIM:STATE", on_state)
 
 # ─── Periodic scans ───────────────────────────────────────────────────────────
 
@@ -135,18 +142,6 @@ store = server.start_background()
 
 print("Server running on port 5075 — press Ctrl+C to stop")
 print(f"Serving {len(store.pv_names())} PVs: {store.pv_names()}")
-
-# ─── Set enum-style metadata via put_nt ───────────────────────────────────────
-# After the server starts we enrich two records with enum choices so that
-# PVA introspection returns them inside display.form.choices.
-
-ENUM_CHOICES = ["Idle", "Running", "Paused", "Error"]
-
-for pv in ("SIM:ENUM_RO", "SIM:ENUM_RW"):
-    nt = spvirit.NtScalar(0.0, display_description="State selector")
-    # NOTE: display_form_choices is set via put_nt – clients see the
-    # enum_t structure {index, choices} automatically.
-    store.put_nt(pv, nt)
 
 # ── Enrich NT-level PVs with full metadata ────────────────────────────────────
 
@@ -185,9 +180,10 @@ try:
         hist = [random.randint(0, 100) for _ in range(32)]
         store.set_array_value("SIM:HISTOGRAM", hist)
 
-        # Cycle the read-only enum through states every 2 seconds
-        enum_idx = (tick // 4) % len(ENUM_CHOICES)
-        store.set_value("SIM:ENUM_RO", enum_idx)
+        # Cycle the NtEnum through states every 2 seconds
+        STATE_CHOICES = ["Idle", "Running", "Paused", "Error"]
+        state_idx = (tick // 4) % len(STATE_CHOICES)
+        store.set_value("SIM:STATE", state_idx)
 
         # Pressure — slow drift around 101.325 kPa with mutating alarm & description
         pressure = 101.325 + 2.0 * math.sin(elapsed * 0.3) + random.gauss(0, 0.05)

@@ -134,6 +134,45 @@ impl PyServerBuilder {
         Ok(slf)
     }
 
+    fn mbbi(
+        mut slf: PyRefMut<'_, Self>,
+        name: String,
+        choices: Vec<String>,
+        initial: i32,
+    ) -> PyRefMut<'_, Self> {
+        let b = slf.builder.take().expect("builder consumed");
+        slf.builder = Some(b.mbbi(name, choices, initial));
+        slf
+    }
+
+    fn mbbo(
+        mut slf: PyRefMut<'_, Self>,
+        name: String,
+        choices: Vec<String>,
+        initial: i32,
+    ) -> PyRefMut<'_, Self> {
+        let b = slf.builder.take().expect("builder consumed");
+        slf.builder = Some(b.mbbo(name, choices, initial));
+        slf
+    }
+
+    fn generic<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        name: String,
+        struct_id: String,
+        fields: &Bound<'py, pyo3::types::PyDict>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let mut field_vec: Vec<(String, spvirit_types::PvValue)> = Vec::new();
+        for (key, val) in fields.iter() {
+            let field_name: String = key.extract()?;
+            let pv_val = py_to_pv_value(&val)?;
+            field_vec.push((field_name, pv_val));
+        }
+        let b = slf.builder.take().expect("builder consumed");
+        slf.builder = Some(b.generic(name, struct_id, field_vec));
+        Ok(slf)
+    }
+
     fn db_file(mut slf: PyRefMut<'_, Self>, path: String) -> PyRefMut<'_, Self> {
         let b = slf.builder.take().expect("builder consumed");
         slf.builder = Some(b.db_file(path));
@@ -355,5 +394,21 @@ impl PyStore {
     fn pv_names(&self, py: Python<'_>) -> PyResult<Vec<String>> {
         let store = self.inner.clone();
         Ok(py.allow_threads(|| RUNTIME.block_on(store.pv_names())))
+    }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Convert a Python value to a [`PvValue`].
+///
+/// Scalars (bool, int, float, str) become `PvValue::Scalar`.
+/// Lists become `PvValue::ScalarArray`.
+fn py_to_pv_value(obj: &Bound<'_, PyAny>) -> PyResult<spvirit_types::PvValue> {
+    if let Ok(list) = obj.downcast::<pyo3::types::PyList>() {
+        let arr = py_to_scalar_array(list.as_any())?;
+        Ok(spvirit_types::PvValue::ScalarArray(arr))
+    } else {
+        let sv = py_to_scalar(obj)?;
+        Ok(spvirit_types::PvValue::Scalar(sv))
     }
 }

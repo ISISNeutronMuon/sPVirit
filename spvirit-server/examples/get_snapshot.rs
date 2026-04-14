@@ -1,11 +1,34 @@
 use spvirit_server::{PvStore, PvaServer};
-use spvirit_types::{NtPayload, ScalarArrayValue, ScalarValue};
+use spvirit_types::{NtPayload, PvValue, ScalarArrayValue, ScalarValue};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = PvaServer::builder()
         .ai("SIM:TEMPERATURE", 22.5)
         .waveform("SIM:SPECTRUM", ScalarArrayValue::F64(vec![0.0; 16]))
+        .mbbi(
+            "SIM:STATE",
+            vec![
+                "Idle".to_string(),
+                "Running".to_string(),
+                "Error".to_string(),
+            ],
+            0,
+        )
+        .generic(
+            "SIM:META",
+            "demo:custom/Meta:1.0",
+            vec![
+                (
+                    "author".to_string(),
+                    PvValue::Scalar(ScalarValue::Str("spvirit".to_string())),
+                ),
+                (
+                    "version".to_string(),
+                    PvValue::Scalar(ScalarValue::I32(1)),
+                ),
+            ],
+        )
         .build();
 
     let store = server.store().clone();
@@ -25,11 +48,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .set_array_value("SIM:SPECTRUM", ScalarArrayValue::F64(spectrum))
                 .await;
 
-            if let Some(snapshot) = store.get_snapshot("SIM:TEMPERATURE").await {
-                print_snapshot("SIM:TEMPERATURE", &snapshot);
-            }
-            if let Some(snapshot) = store.get_snapshot("SIM:SPECTRUM").await {
-                print_snapshot("SIM:SPECTRUM", &snapshot);
+            // Cycle the enum state
+            let state_idx = (tick % 3) as i32;
+            store
+                .put_nt(
+                    "SIM:STATE",
+                    NtPayload::Enum(spvirit_types::NtEnum::new(
+                        state_idx,
+                        vec![
+                            "Idle".to_string(),
+                            "Running".to_string(),
+                            "Error".to_string(),
+                        ],
+                    )),
+                )
+                .await;
+
+            for pv in &["SIM:TEMPERATURE", "SIM:SPECTRUM", "SIM:STATE", "SIM:META"] {
+                if let Some(snapshot) = store.get_snapshot(pv).await {
+                    print_snapshot(pv, &snapshot);
+                }
             }
 
             tick += 1;

@@ -437,6 +437,30 @@ fn apply_put_to_record(
             // Table/NdArray PUT not supported via high-level API yet.
             debug!("PUT to NtTable/NtNdArray not yet supported in SimplePvStore");
         }
+        RecordData::NtEnum { nt, .. } => {
+            // Accept index updates for NtEnum PVs.
+            for (name, val) in fields {
+                if name == "value" {
+                    let idx = match val {
+                        DecodedValue::Int32(v) => Some(*v),
+                        DecodedValue::Int64(v) => Some(*v as i32),
+                        DecodedValue::Int16(v) => Some(*v as i32),
+                        DecodedValue::Int8(v) => Some(*v as i32),
+                        DecodedValue::Float64(v) => Some(*v as i32),
+                        _ => None,
+                    };
+                    if let Some(idx) = idx {
+                        if nt.index != idx {
+                            nt.index = idx;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        RecordData::Generic { .. } => {
+            debug!("PUT to Generic not yet supported in SimplePvStore");
+        }
     }
 
     changed
