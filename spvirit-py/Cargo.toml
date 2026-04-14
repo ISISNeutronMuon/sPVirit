@@ -1,0 +1,26 @@
+[package]
+name = "spvirit-py"
+version = "0.1.6"
+edition = "2024"
+description = "Python bindings for spvirit PVAccess client and server."
+license = "BSD-3-Clause"
+repository = "https://github.com/ISISNeutronMuon/spvirit"
+readme = "../README.md"
+keywords = ["epics", "pvaccess", "python", "pyo3"]
+categories = ["science"]
+authors = ["Mateusz Leputa for ISIS Neutron and Muon Source Copyright 2026"]
+
+[lib]
+name = "spvirit"
+crate-type = ["cdylib"]
+
+[dependencies]
+spvirit-types = { version = "0.1.6", path = "../spvirit-types" }
+spvirit-codec = { version = "0.1.6", path = "../spvirit-codec" }
+spvirit-client = { version = "0.1.6", path = "../spvirit-client" }
+spvirit-server = { version = "0.1.6", path = "../spvirit-server" }
+
+pyo3 = { version = "0.24", features = ["extension-module"] }
+tokio = { version = "1.47.1", features = ["rt-multi-thread", "sync", "macros", "time"] }
+serde_json = "1.0.145"
+tracing = "0.1.41"
