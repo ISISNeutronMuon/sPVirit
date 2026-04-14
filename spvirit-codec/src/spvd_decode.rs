@@ -265,10 +265,6 @@ impl fmt::Display for DecodedValue {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    if i >= 5 {
-                        write!(f, "... ({} total)", arr.len())?;
-                        break;
-                    }
                     write!(f, "{}", v)?;
                 }
                 write!(f, "]")
@@ -1280,11 +1276,9 @@ fn format_scalar_value(val: &DecodedValue) -> String {
         DecodedValue::Array(arr) => {
             if arr.is_empty() {
                 "[]".to_string()
-            } else if arr.len() <= 3 {
+            } else {
                 let items: Vec<String> = arr.iter().map(|v| format_scalar_value(v)).collect();
                 format!("[{}]", items.join(", "))
-            } else {
-                format!("[{} items]", arr.len())
             }
         }
         DecodedValue::Structure(fields) => {
