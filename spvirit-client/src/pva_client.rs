@@ -233,6 +233,16 @@ impl PvaClient {
         low_level_pvget(&opts).await
     }
 
+    /// Fetch a PV with field filtering (equivalent to `pvget -r "field(value,alarm)"`).
+    pub async fn pvget_fields(
+        &self,
+        pv_name: &str,
+        fields: &[&str],
+    ) -> Result<PvGetResult, PvGetError> {
+        let opts = self.opts(pv_name);
+        crate::client::pvget_fields(&opts, fields).await
+    }
+
     // ─── pvput ───────────────────────────────────────────────────────────
 
     /// Write a value to a PV.

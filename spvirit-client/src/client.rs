@@ -6,6 +6,7 @@ use crate::auth::{resolved_authnz_host, resolved_authnz_user};
 use crate::search::resolve_pv_server;
 use crate::transport::{read_packet, read_until};
 use crate::types::{PvGetError, PvGetOptions, PvGetResult};
+use spvirit_codec::spvd_encode::encode_pv_request;
 use spvirit_codec::epics_decode::{
     PvaPacket, PvaPacketCommand, decode_op_response_status as codec_decode_op_response_status,
 };
@@ -134,7 +135,19 @@ pub async fn establish_channel(
     })
 }
 
+/// Convenience wrapper: GET with no field filtering.
 pub async fn pvget(opts: &PvGetOptions) -> Result<PvGetResult, PvGetError> {
+    pvget_fields(opts, &[]).await
+}
+
+/// GET with optional field filtering.
+///
+/// If `fields` is empty, requests all fields (equivalent to `-r ""`).
+/// Otherwise, encodes a pvRequest like `field(value,alarm,timeStamp)`.
+pub async fn pvget_fields(
+    opts: &PvGetOptions,
+    fields: &[&str],
+) -> Result<PvGetResult, PvGetError> {
     let target = resolve_pv_server(opts).await?;
 
     let conn = establish_channel(target, opts).await?;
@@ -147,12 +160,17 @@ pub async fn pvget(opts: &PvGetOptions) -> Result<PvGetResult, PvGetError> {
     } = conn;
 
     let ioid = 1u32;
-    // Match EPICS pvget GET init payload (extra pvRequest bytes observed in capture).
+    let pv_request = if fields.is_empty() {
+        // Empty pvRequest — request all fields
+        vec![0xfd, 0x02, 0x00, 0x80, 0x00, 0x00]
+    } else {
+        encode_pv_request(fields, is_be)
+    };
     let get_init_req = encode_get_request(
         sid,
         ioid,
         0x08,
-        &[0xfd, 0x02, 0x00, 0x80, 0x00, 0x00],
+        &pv_request,
         version,
         is_be,
     );
