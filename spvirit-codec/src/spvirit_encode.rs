@@ -48,7 +48,12 @@ pub fn encode_status_fatal(message: &str, is_be: bool) -> Vec<u8> {
 }
 
 pub fn encode_message_error(message: &str, version: u8, is_be: bool) -> Vec<u8> {
-    let payload = encode_status_error(message, is_be);
+    // MESSAGE (cmd=18) payload: ioid(u32) + message_type(u8) + message(string)
+    // Use ioid=0 and message_type=2 (error).
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&if is_be { 0u32.to_be_bytes() } else { 0u32.to_le_bytes() });
+    payload.push(2); // error
+    payload.extend_from_slice(&encode_string_pva(message, is_be));
     let mut out = encode_header(true, is_be, false, version, 18, payload.len() as u32);
     out.extend_from_slice(&payload);
     out
@@ -149,11 +154,14 @@ pub fn encode_control_message(
 pub fn encode_connection_validation(
     buffer_size: u32,
     introspection_registry_size: u16,
-    qos: u16,
-    authz_name: &str,
+    auth_methods: &[&str],
     version: u8,
     is_be: bool,
 ) -> Vec<u8> {
+    // Server→client CONNECTION_VALIDATION (cmd=1):
+    //   buffer_size(u32) + introspection_registry_size(u16)
+    //   + Size(count) + count × string   (auth method names)
+    // NOTE: No QoS field in the server→client direction.
     let mut payload = Vec::new();
     payload.extend_from_slice(&if is_be {
         buffer_size.to_be_bytes()
@@ -165,12 +173,10 @@ pub fn encode_connection_validation(
     } else {
         introspection_registry_size.to_le_bytes()
     });
-    payload.extend_from_slice(&if is_be {
-        qos.to_be_bytes()
-    } else {
-        qos.to_le_bytes()
-    });
-    payload.extend_from_slice(&encode_string_pva(authz_name, is_be));
+    payload.extend_from_slice(&encode_size_pva(auth_methods.len(), is_be));
+    for method in auth_methods {
+        payload.extend_from_slice(&encode_string_pva(method, is_be));
+    }
     let mut out = encode_header(true, is_be, false, version, 1, payload.len() as u32);
     out.extend_from_slice(&payload);
     out
@@ -1009,15 +1015,16 @@ mod tests {
 
     #[test]
     fn encode_decode_connection_validation_roundtrip() {
-        let msg = encode_connection_validation(4096, 2, 0x10, "test", 2, true);
+        let msg = encode_connection_validation(4096, 2, &["anonymous", "ca"], 2, true);
         let mut pkt = PvaPacket::new(&msg);
         let cmd = pkt.decode_payload().expect("decoded");
         match cmd {
             PvaPacketCommand::ConnectionValidation(payload) => {
+                assert!(payload.is_server);
                 assert_eq!(payload.buffer_size, 4096);
                 assert_eq!(payload.introspection_registry_size, 2);
-                assert_eq!(payload.qos, 0x10);
-                assert_eq!(payload.authz.as_deref(), Some("test"));
+                assert_eq!(payload.qos, 0); // server→client has no qos
+                assert_eq!(payload.authz.as_deref(), Some("anonymous"));
             }
             other => panic!("unexpected decode: {:?}", other),
         }

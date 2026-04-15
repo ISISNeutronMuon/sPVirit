@@ -191,7 +191,7 @@ impl LocalServerFixture {
         let udp_port = free_udp_port().ok_or_else(|| "no free UDP port".to_string())?;
         let db_path = write_temp_db_file("pva_interop", db_contents)?;
 
-        let server_bin = workspace_bin("spvirit_server");
+        let server_bin = workspace_bin("spserver");
         let mut command = Command::new(server_bin);
         command
             .arg("--db-file")

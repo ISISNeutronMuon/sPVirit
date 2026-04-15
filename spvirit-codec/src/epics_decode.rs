@@ -493,7 +493,7 @@ pub struct PvaConnectionValidationPayload {
 
 impl PvaConnectionValidationPayload {
     pub fn new(raw: &[u8], is_be: bool, is_server: bool) -> Option<Self> {
-        if raw.len() < 8 {
+        if raw.len() < 6 {
             debug!(
                 "PvaConnectionValidationPayload::new: raw too short {}",
                 raw.len()
@@ -510,44 +510,72 @@ impl PvaConnectionValidationPayload {
         } else {
             u16::from_le_bytes(raw[4..6].try_into().ok()?)
         };
-        let qos = if is_be {
-            u16::from_be_bytes(raw[6..8].try_into().ok()?)
-        } else {
-            u16::from_le_bytes(raw[6..8].try_into().ok()?)
-        };
-        let authz = if raw.len() > 8 {
-            // Try legacy format: single string after qos.
-            if let Some((s, consumed)) = decode_string(&raw[8..], is_be) {
-                if 8 + consumed == raw.len() {
-                    Some(s)
-                } else {
-                    // AuthZ flags + name + method (spec-style).
-                    let mut offset = 9; // skip flags
-                    let name = decode_string(&raw[offset..], is_be).map(|(s, c)| {
-                        offset += c;
-                        s
-                    });
-                    let method = decode_string(&raw[offset..], is_be).map(|(s, _)| s);
-                    match (name, method) {
-                        (Some(n), _) if !n.is_empty() => Some(n),
-                        (_, Some(m)) if !m.is_empty() => Some(m),
-                        _ => None,
+
+        if is_server {
+            // Server→client: buffer_size(u32) + isize(u16) + Size(nauth) + nauth × string
+            // No QoS field.
+            let mut offset = 6;
+            let authz = if offset < raw.len() {
+                if let Some((count, consumed)) = decode_size(&raw[offset..], is_be) {
+                    offset += consumed;
+                    let mut first_method = None;
+                    for _ in 0..count {
+                        if let Some((s, c)) = decode_string(&raw[offset..], is_be) {
+                            if first_method.is_none() && !s.is_empty() {
+                                first_method = Some(s);
+                            }
+                            offset += c;
+                        }
                     }
+                    first_method
+                } else {
+                    // Fallback: try single string (legacy spvirit servers).
+                    decode_string(&raw[offset..], is_be).map(|(s, _)| s)
                 }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
-        Some(Self {
-            is_server,
-            buffer_size,
-            introspection_registry_size,
-            qos,
-            authz,
-        })
+            Some(Self {
+                is_server,
+                buffer_size,
+                introspection_registry_size,
+                qos: 0,
+                authz,
+            })
+        } else {
+            // Client→server: buffer_size(u32) + isize(u16) + qos(u16) + auth_method(string) [+ FieldDesc cred]
+            if raw.len() < 8 {
+                return None;
+            }
+            let qos = if is_be {
+                u16::from_be_bytes(raw[6..8].try_into().ok()?)
+            } else {
+                u16::from_le_bytes(raw[6..8].try_into().ok()?)
+            };
+            let authz = if raw.len() > 8 {
+                if let Some((s, consumed)) = decode_string(&raw[8..], is_be) {
+                    if 8 + consumed == raw.len() {
+                        Some(s)
+                    } else {
+                        // Has trailing FieldDesc for credentials; auth name is the string.
+                        Some(s)
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            Some(Self {
+                is_server,
+                buffer_size,
+                introspection_registry_size,
+                qos,
+                authz,
+            })
+        }
     }
 }
 
@@ -726,22 +754,58 @@ impl PvaGetFieldPayload {
 
 #[derive(Debug)]
 pub struct PvaMessagePayload {
+    pub ioid: u32,
+    pub message_type: u8,
+    pub message: Option<String>,
+    /// Legacy compat: if the payload looks like old Status format, decode that.
     pub status: Option<PvaStatus>,
     pub raw: Vec<u8>,
 }
 
 impl PvaMessagePayload {
     pub fn new(raw: &[u8], is_be: bool) -> Option<Self> {
-        let (status, consumed) = decode_status(raw, is_be);
-        let remainder = if raw.len() > consumed {
-            raw[consumed..].to_vec()
+        // PVA spec MESSAGE format: ioid(u32) + message_type(u8) + message(string)
+        if raw.len() >= 5 {
+            let ioid = if is_be {
+                u32::from_be_bytes(raw[0..4].try_into().ok()?)
+            } else {
+                u32::from_le_bytes(raw[0..4].try_into().ok()?)
+            };
+            let message_type = raw[4];
+            let message = if raw.len() > 5 {
+                decode_string(&raw[5..], is_be).map(|(s, _)| s)
+            } else {
+                None
+            };
+            // Build a synthetic PvaStatus so existing tests/code that inspect .status still work.
+            let code = match message_type {
+                0 => 0xFF, // info → OK
+                1 => 0x01, // warning
+                2 => 0x02, // error
+                _ => 0x03, // fatal
+            };
+            let status = Some(PvaStatus {
+                code,
+                message: message.clone(),
+                stack: None,
+            });
+            Some(Self {
+                ioid,
+                message_type,
+                message,
+                status,
+                raw: raw.to_vec(),
+            })
         } else {
-            vec![]
-        };
-        Some(Self {
-            status,
-            raw: remainder,
-        })
+            // Fallback for very short payloads
+            Some(Self {
+                ioid: 0,
+                message_type: 0,
+                message: None,
+                status: None,
+                raw: raw.to_vec(),
+            })
+        }
     }
 }
 
@@ -1337,16 +1401,17 @@ impl PvaOpPayload {
         };
 
         // Status is only present in certain subcmd types:
-        // - INIT responses (subcmd & 0x08) from server
-        // - NOT present in data updates (subcmd == 0x00) - those start with bitset directly
-        // Status format (per Lua dissector): first byte = code. If code==0xff (255) -> no status, remaining buffer is PVD.
-        // Otherwise follow with two length-prefixed strings: message, stack.
+        // Status format (per Lua dissector): first byte = code. If code==0xff (255) -> OK
+        // shorthand (1 byte only). Otherwise follow with two length-prefixed strings:
+        // message, stack.
+        // Server responses carry a status prefix for INIT responses (subcmd & 0x08),
+        // and for non-INIT responses on GET (10), PUT (11), PUT_GET (12).
+        // Monitor (13) data updates (non-INIT) do NOT have a status prefix.
         let mut status: Option<PvaStatus> = None;
         let mut pvd_raw: Vec<u8> = vec![];
 
-        // Only parse status for INIT responses (subcmd & 0x08), not for data updates (subcmd=0x00).
-        // Some servers still prefix data responses with 0xFF status OK; handle that below.
-        let has_status = is_server && (subcmd & 0x08) != 0;
+        let has_status = is_server
+            && ((subcmd & 0x08) != 0 || (command != 13 && command != 14));
 
         if !body.is_empty() {
             if has_status {
@@ -1358,13 +1423,7 @@ impl PvaOpPayload {
                     vec![]
                 };
             } else {
-                // No status for data updates - body is the raw PVD (bitset + values).
-                // Some servers still prefix data responses with status OK (0xFF). Skip it.
-                if body[0] == 0xFF {
-                    pvd_raw = body[1..].to_vec();
-                } else {
-                    pvd_raw = body.clone();
-                }
+                pvd_raw = body.clone();
             }
         }
 

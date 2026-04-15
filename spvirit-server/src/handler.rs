@@ -82,6 +82,10 @@ pub struct ServerState<S: PvStore> {
     pub pvlist_mode: PvListMode,
     pub pvlist_max: usize,
     pub pvlist_allow_pattern: Option<Regex>,
+    pub guid: [u8; 12],
+    pub tcp_port: u16,
+    pub advertise_ip: Option<IpAddr>,
+    pub listen_ip: IpAddr,
 }
 
 impl<S: PvStore> ServerState<S> {
@@ -92,6 +96,10 @@ impl<S: PvStore> ServerState<S> {
         pvlist_mode: PvListMode,
         pvlist_max: usize,
         pvlist_allow_pattern: Option<Regex>,
+        guid: [u8; 12],
+        tcp_port: u16,
+        advertise_ip: Option<IpAddr>,
+        listen_ip: IpAddr,
     ) -> Self {
         Self {
             store,
@@ -102,6 +110,10 @@ impl<S: PvStore> ServerState<S> {
             pvlist_mode,
             pvlist_max,
             pvlist_allow_pattern,
+            guid,
+            tcp_port,
+            advertise_ip,
+            listen_ip,
         }
     }
 }
@@ -781,7 +793,7 @@ pub async fn handle_connection<S: PvStore>(
     state.registry.send_msg(conn_id, set_byte_order).await;
 
     // Server sends Connection Validation (cmd=1) next.
-    let server_validation = encode_connection_validation(16_384, 512, 0, "anonymous", 2, false);
+    let server_validation = encode_connection_validation(16_384, 512, &["anonymous", "ca"], 2, false);
     validate_encoded_packet(conn_id, "server_validation_init", &server_validation);
     dump_hex_packet(
         conn_id,
@@ -1620,8 +1632,8 @@ pub async fn handle_connection<S: PvStore>(
                 }
             }
             PvaPacketCommand::AuthNZ(_) => {
-                let resp = encode_message_error("AUTHNZ command is not supported", version, is_be);
-                state.registry.send_msg(conn_id, resp).await;
+                // Silently accept — pvxs and pvAccessCPP ignore AUTHNZ.
+                debug!("Conn {}: ignoring AUTHNZ", conn_id);
             }
             PvaPacketCommand::AclChange(_) => {
                 let resp =
@@ -1657,8 +1669,75 @@ pub async fn handle_connection<S: PvStore>(
                     encode_message_error("ORIGIN_TAG command is not supported", version, is_be);
                 state.registry.send_msg(conn_id, resp).await;
             }
-            PvaPacketCommand::Search(_)
-            | PvaPacketCommand::SearchResponse(_)
+            PvaPacketCommand::Search(payload) => {
+                debug!(
+                    "Conn {}: TCP search: pv_count={} mask=0x{:02x}",
+                    conn_id,
+                    payload.pv_requests.len(),
+                    payload.mask
+                );
+                let accepts_tcp = payload.protocols.is_empty()
+                    || payload
+                        .protocols
+                        .iter()
+                        .any(|p| p.eq_ignore_ascii_case("tcp"));
+                if accepts_tcp {
+                    let all_names = state.store.list_pvs().await;
+                    let visible_names = collect_visible_pv_names(
+                        &all_names,
+                        state.pvlist_mode,
+                        state.pvlist_allow_pattern.as_ref(),
+                        state.pvlist_max,
+                    );
+                    let mut cids = Vec::new();
+                    for (cid, name) in &payload.pv_requests {
+                        if state.store.has_pv(name).await
+                            || is_virtual_event_pv(name)
+                            || (is_pvlist_virtual_pv(name)
+                                && state.pvlist_mode == PvListMode::List)
+                            || (is_server_rpc_pv(name) && state.pvlist_mode != PvListMode::Off)
+                        {
+                            cids.push(*cid);
+                            continue;
+                        }
+                        if state.pvlist_mode != PvListMode::Off
+                            && is_pattern_query(name)
+                            && visible_names.iter().any(|pv| wildcard_match(name, pv))
+                        {
+                            cids.push(*cid);
+                        }
+                    }
+                    let server_discovery_ping = payload.pv_requests.is_empty();
+                    let found = server_discovery_ping || !cids.is_empty();
+                    let resp_ip = state.advertise_ip.unwrap_or(state.listen_ip);
+                    let addr_bytes = if resp_ip.is_unspecified() {
+                        [0u8; 16]
+                    } else {
+                        ip_to_bytes(resp_ip)
+                    };
+                    let response = encode_search_response(
+                        state.guid,
+                        payload.seq,
+                        addr_bytes,
+                        state.tcp_port,
+                        "tcp",
+                        found,
+                        &cids,
+                        version,
+                        is_be,
+                    );
+                    state.registry.send_msg(conn_id, response).await;
+                    debug!(
+                        "Conn {}: TCP search responded found={} matches={}",
+                        conn_id,
+                        found,
+                        cids.len()
+                    );
+                } else {
+                    debug!("Conn {}: TCP search: no compatible protocol", conn_id);
+                }
+            }
+            PvaPacketCommand::SearchResponse(_)
             | PvaPacketCommand::Beacon(_) => {
                 let resp =
                     encode_message_error("Unexpected command for server endpoint", version, is_be);

@@ -77,6 +77,7 @@ impl<S: PvStore> PvaServerState<S> {
         config: &PvaServerConfig,
         registry: Arc<MonitorRegistry>,
     ) -> Self {
+        let guid = rand_guid();
         let inner = Arc::new(ServerState::new(
             store,
             registry.clone(),
@@ -84,6 +85,10 @@ impl<S: PvStore> PvaServerState<S> {
             config.pvlist_mode,
             config.pvlist_max,
             config.pvlist_allow_pattern.clone(),
+            guid,
+            config.tcp_port,
+            config.advertise_ip,
+            config.listen_ip,
         ));
         Self { inner, registry }
     }
@@ -110,7 +115,7 @@ pub async fn run_pva_server_with_registry<S: PvStore>(
     let server_state = PvaServerState::with_registry(store, &config, registry);
     let state = server_state.inner;
 
-    let guid = rand_guid();
+    let guid = state.guid;
     let tcp_addr = SocketAddr::new(config.listen_ip, config.tcp_port);
     let udp_addr = SocketAddr::new(config.listen_ip, config.udp_port);
 

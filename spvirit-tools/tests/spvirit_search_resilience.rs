@@ -57,7 +57,7 @@ fn start_test_server() -> Option<(std::process::Child, u16, u16)> {
     let udp_port = free_udp_port()?;
     let db_path = write_temp_db();
 
-    let server_bin = workspace_bin("spvirit_server");
+    let server_bin = workspace_bin("spserver");
     let child = Command::new(server_bin)
         .arg("--db-file")
         .arg(&db_path)

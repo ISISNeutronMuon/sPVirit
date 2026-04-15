@@ -228,7 +228,7 @@ fn java_pvaccess_ndarray_interop() {
     // Spawn pvdodeca on its own ports
     let tcp_port = free_tcp_port().expect("free TCP port for pvdodeca");
     let udp_port = free_udp_port().expect("free UDP port for pvdodeca");
-    let dodeca_bin = workspace_bin("spvirit_dodeca");
+    let dodeca_bin = workspace_bin("spdodeca");
     let pv_name = format!("DODECA:JTEST:{}", std::process::id());
 
     let mut dodeca_cmd = Command::new(&dodeca_bin);

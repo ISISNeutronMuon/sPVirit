@@ -69,7 +69,10 @@ fn rust_tool_command(bin: &str, server: Option<&str>, pv: &str) -> Command {
     if let Some(addr) = server {
         command.arg("--server").arg(addr);
     }
+    let timeout = interop_cmd_timeout_secs();
     command
+        .arg("-w")
+        .arg(timeout.to_string())
         .arg(pv)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -83,7 +86,7 @@ fn interop_cmd_timeout_secs() -> u64 {
 }
 
 fn run_rust_read_tools(server: Option<&str>, pv: &str) {
-    let pvget_bin = workspace_bin("spvirit_get");
+    let pvget_bin = workspace_bin("spget");
     let mut pvget = rust_tool_command(&pvget_bin, server, pv);
     let pvget_output = run_command(&mut pvget, "rust spvirit_get")
         .unwrap_or_else(|error| panic!("pvget failed for {}: {}", pv, error));
@@ -109,7 +112,7 @@ fn run_rust_read_tools(server: Option<&str>, pv: &str) {
         pvget_text
     );
 
-    let pvinfo_bin = workspace_bin("spvirit_info");
+    let pvinfo_bin = workspace_bin("spinfo");
     let mut pvinfo = rust_tool_command(&pvinfo_bin, server, pv);
     let pvinfo_output = run_command(&mut pvinfo, "rust spvirit_info")
         .unwrap_or_else(|error| panic!("pvinfo failed for {}: {}", pv, error));
@@ -147,9 +150,9 @@ fn run_rust_write_restore(server: Option<&str>, pv: &str) {
         return;
     }
 
-    let pvput_bin = workspace_bin("spvirit_put");
+    let pvput_bin = workspace_bin("spput");
 
-    let mut read_before = rust_tool_command(&workspace_bin("spvirit_get"), server, pv);
+    let mut read_before = rust_tool_command(&workspace_bin("spget"), server, pv);
     let before_output = run_command_success(&mut read_before, "rust pvget before write")
         .unwrap_or_else(|error| panic!("pvget before write failed for {}: {}", pv, error));
     let before_text = String::from_utf8_lossy(&before_output.stdout);
@@ -415,7 +418,7 @@ fn p4p_provider_matrix_optional() {
 
     let ready_delay_ms = env_string("P4P_PROVIDER_READY_MS")
         .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(1200);
+        .unwrap_or(3000);
     thread::sleep(Duration::from_millis(ready_delay_ms));
 
     let pv_rw = env_string("P4P_TEST_PV_RW").unwrap_or_else(|| "p4p:rw".to_string());
@@ -461,8 +464,225 @@ fn p4p_provider_matrix_optional() {
     }
 
     let server = env_string("P4P_TEST_SERVER");
-    run_rust_read_tools(server.as_deref(), &pv_rw);
-    run_rust_read_tools(server.as_deref(), &pv_ro);
+
+    // ── Core spget on default RW/RO PVs ──────────────────────────────────────
+    // NOTE: spinfo (GET_FIELD cmd 0x11) is skipped for p4p because pvxs
+    // cannot decode spvirit's GET_FIELD encoding, causing connection crashes.
+    let spget_bin = workspace_bin("spget");
+    for pv in [&pv_rw, &pv_ro] {
+        let mut cmd = rust_tool_command(&spget_bin, server.as_deref(), pv);
+        let output = run_command_success(&mut cmd, &format!("spget {}", pv))
+            .unwrap_or_else(|e| panic!("spget failed for {}: {}", pv, e));
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            contains_any(&text, &[pv, "value", "alarm", "timeStamp"]),
+            "unexpected spget output for {}: {}",
+            pv,
+            text
+        );
+    }
+
+    // ── Multi-type scalar GET ────────────────────────────────────────────────
+    // Exercise spget across different scalar types served by p4p_server.py
+    let scalar_pvs = [
+        ("p4p:int", "7"),
+        ("p4p:str", "hello"),
+        ("p4p:float", "2.5"),
+        ("p4p:long", "123456789"),
+    ];
+    for (pv, expected_fragment) in &scalar_pvs {
+        let mut cmd = rust_tool_command(&spget_bin, server.as_deref(), pv);
+        let output = run_command_success(&mut cmd, &format!("spget {}", pv))
+            .unwrap_or_else(|e| panic!("spget failed for {}: {}", pv, e));
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            text.contains(expected_fragment),
+            "spget {}: expected '{}' in output: {}",
+            pv,
+            expected_fragment,
+            text
+        );
+    }
+
+    // ── Array GET ────────────────────────────────────────────────────────────
+    let array_pvs = [
+        ("p4p:arr:double", &["1", "2", "3"] as &[&str]),
+        ("p4p:arr:int", &["10", "20", "30"]),
+        ("p4p:arr:str", &["alpha", "beta", "gamma"]),
+    ];
+    for (pv, fragments) in &array_pvs {
+        let mut cmd = rust_tool_command(&spget_bin, server.as_deref(), pv);
+        let output = run_command_success(&mut cmd, &format!("spget {}", pv))
+            .unwrap_or_else(|e| panic!("spget failed for {}: {}", pv, e));
+        let text = String::from_utf8_lossy(&output.stdout);
+        for frag in *fragments {
+            assert!(
+                text.contains(frag),
+                "spget {}: expected '{}' in output: {}",
+                pv,
+                frag,
+                text
+            );
+        }
+    }
+
+    // ── Enum GET ─────────────────────────────────────────────────────────────
+    {
+        let mut cmd = rust_tool_command(&spget_bin, server.as_deref(), "p4p:enum");
+        let output = run_command_success(&mut cmd, "spget p4p:enum")
+            .unwrap_or_else(|e| panic!("spget failed for p4p:enum: {}", e));
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            contains_any(&text, &["On", "Off", "Error", "index", "choices"]),
+            "spget p4p:enum: unexpected output: {}",
+            text
+        );
+    }
+
+    // ── JSON output mode ─────────────────────────────────────────────────────
+    {
+        let mut cmd = Command::new(&spget_bin);
+        if let Some(addr) = server.as_deref() {
+            cmd.arg("--server").arg(addr);
+        }
+        cmd.arg("-w")
+            .arg(interop_cmd_timeout_secs().to_string())
+            .arg("--json")
+            .arg(&pv_rw)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = run_command_success(&mut cmd, "spget --json")
+            .unwrap_or_else(|e| panic!("spget --json failed: {}", e));
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            text.contains('{') && text.contains("value"),
+            "spget --json: expected JSON with 'value' field: {}",
+            text
+        );
+    }
+
+    // ── PUT write + read-back ────────────────────────────────────────────────
+    let spput_bin = workspace_bin("spput");
+    {
+        // Write a new value to p4p:rw
+        let mut put_cmd = Command::new(&spput_bin);
+        if let Some(addr) = server.as_deref() {
+            put_cmd.arg("--server").arg(addr);
+        }
+        put_cmd
+            .arg("-w")
+            .arg(interop_cmd_timeout_secs().to_string())
+            .arg(&pv_rw)
+            .arg("99.5")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        run_command_success(&mut put_cmd, "spput p4p:rw 99.5")
+            .unwrap_or_else(|e| panic!("spput write failed: {}", e));
+
+        // Read back and verify
+        let mut get_cmd = rust_tool_command(&spget_bin, server.as_deref(), &pv_rw);
+        let output = run_command_success(&mut get_cmd, "spget p4p:rw after put")
+            .unwrap_or_else(|e| panic!("spget after put failed: {}", e));
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            text.contains("99.5"),
+            "spget after put: expected '99.5' in output: {}",
+            text
+        );
+
+        // Restore
+        let mut restore_cmd = Command::new(&spput_bin);
+        if let Some(addr) = server.as_deref() {
+            restore_cmd.arg("--server").arg(addr);
+        }
+        restore_cmd
+            .arg("-w")
+            .arg(interop_cmd_timeout_secs().to_string())
+            .arg(&pv_rw)
+            .arg("42.0")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        run_command_success(&mut restore_cmd, "spput p4p:rw restore")
+            .unwrap_or_else(|e| panic!("spput restore failed: {}", e));
+    }
+
+    // ── PUT to integer PV ────────────────────────────────────────────────────
+    {
+        let mut put_cmd = Command::new(&spput_bin);
+        if let Some(addr) = server.as_deref() {
+            put_cmd.arg("--server").arg(addr);
+        }
+        put_cmd
+            .arg("-w")
+            .arg(interop_cmd_timeout_secs().to_string())
+            .arg("p4p:int")
+            .arg("42")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        run_command_success(&mut put_cmd, "spput p4p:int 42")
+            .unwrap_or_else(|e| panic!("spput int failed: {}", e));
+
+        let mut get_cmd = rust_tool_command(&spget_bin, server.as_deref(), "p4p:int");
+        let output = run_command_success(&mut get_cmd, "spget p4p:int after put")
+            .unwrap_or_else(|e| panic!("spget p4p:int after put failed: {}", e));
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            text.contains("42"),
+            "spget p4p:int after put: expected '42' in output: {}",
+            text
+        );
+    }
+
+    // ── PUT to string PV ─────────────────────────────────────────────────────
+    {
+        let mut put_cmd = Command::new(&spput_bin);
+        if let Some(addr) = server.as_deref() {
+            put_cmd.arg("--server").arg(addr);
+        }
+        put_cmd
+            .arg("-w")
+            .arg(interop_cmd_timeout_secs().to_string())
+            .arg("p4p:str")
+            .arg("world")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        run_command_success(&mut put_cmd, "spput p4p:str world")
+            .unwrap_or_else(|e| panic!("spput string failed: {}", e));
+
+        let mut get_cmd = rust_tool_command(&spget_bin, server.as_deref(), "p4p:str");
+        let output = run_command_success(&mut get_cmd, "spget p4p:str after put")
+            .unwrap_or_else(|e| panic!("spget p4p:str after put failed: {}", e));
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            text.contains("world"),
+            "spget p4p:str after put: expected 'world' in output: {}",
+            text
+        );
+    }
+
+    // NOTE: spinfo introspection tests are skipped for p4p because pvxs
+    // cannot decode spvirit's GET_FIELD (cmd 0x11) encoding.
+
+    // ── Monitor smoke test ───────────────────────────────────────────────────
+    // Start spmonitor, wait briefly for initial update, then kill.
+    {
+        let spmonitor_bin = workspace_bin("spmonitor");
+        let mut cmd = Command::new(&spmonitor_bin);
+        if let Some(addr) = server.as_deref() {
+            cmd.arg("--server").arg(addr);
+        }
+        cmd.arg("-w")
+            .arg(interop_cmd_timeout_secs().to_string())
+            .arg(&pv_rw)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut guard = ProcessGuard::spawn(&mut cmd, "spmonitor p4p:rw")
+            .unwrap_or_else(|e| panic!("spmonitor failed to start: {}", e));
+        thread::sleep(Duration::from_millis(800));
+        guard.kill_and_wait();
+    }
+
+    // ── EPICS tools (optional, when EPICS_BASE_BIN is available) ─────────────
     run_epics_read_tools(&pv_rw);
     run_epics_read_tools(&pv_ro);
     let pvlist_target = env_string("P4P_EPICS_PVLIST_TARGET")

@@ -518,7 +518,7 @@ async fn handle_connection(
     let set_byte_order = encode_control_message(true, false, 2, 2, 0);
     state.send_msg(conn_id, set_byte_order).await;
 
-    let server_validation = encode_connection_validation(16_384, 512, 0, "anonymous", 2, false);
+    let server_validation = encode_connection_validation(16_384, 512, &["anonymous", "ca"], 2, false);
     state.send_msg(conn_id, server_validation).await;
 
     let mut last_activity = Instant::now();

@@ -70,7 +70,7 @@ record(subArray, "SIM:SUB") {
 }
 
 fn run_pvput_json(server: &str, pv: &str, json: &str) -> bool {
-    let pvput_bin = workspace_bin("spvirit_put");
+    let pvput_bin = workspace_bin("spput");
     Command::new(pvput_bin)
         .arg("--server")
         .arg(server)
@@ -130,7 +130,7 @@ async fn lifecycle_array_and_nt_record_pvs() {
 
     let db_path = write_array_db();
 
-    let server_bin = workspace_bin("spvirit_server");
+    let server_bin = workspace_bin("spserver");
     let mut child = Command::new(server_bin)
         .arg("--db-file")
         .arg(&db_path)

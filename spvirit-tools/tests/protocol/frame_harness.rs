@@ -88,7 +88,7 @@ impl TestServer {
         let udp_port = free_udp_port().ok_or_else(|| "failed to allocate udp port".to_string())?;
         let db_path = write_test_db_file().map_err(|e| format!("write temp db: {}", e))?;
 
-        let server_bin = workspace_bin("spvirit_server");
+        let server_bin = workspace_bin("spserver");
         let mut cmd = Command::new(server_bin);
         cmd.arg("--db-file")
             .arg(&db_path)

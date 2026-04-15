@@ -62,7 +62,7 @@ record(stringin, "SIM:STR") {
 }
 
 fn run_pvput(server: &str, pv: &str, value: &str) -> std::io::Result<()> {
-    let pvput_bin = workspace_bin("spvirit_put");
+    let pvput_bin = workspace_bin("spput");
     let status = Command::new(pvput_bin)
         .arg("--server")
         .arg(server)
@@ -109,7 +109,7 @@ async fn pvget_integration_smoke() {
     };
     let db_path = write_temp_db();
 
-    let server_bin = workspace_bin("spvirit_server");
+    let server_bin = workspace_bin("spserver");
     let mut child = Command::new(server_bin)
         .arg("--db-file")
         .arg(&db_path)
@@ -153,7 +153,7 @@ async fn pvput_integration_smoke() {
     };
     let db_path = write_temp_db();
 
-    let server_bin = workspace_bin("spvirit_server");
+    let server_bin = workspace_bin("spserver");
     let mut child = Command::new(server_bin)
         .arg("--db-file")
         .arg(&db_path)
@@ -205,7 +205,7 @@ async fn pvmonitor_integration_optional() {
     };
     let db_path = write_temp_db();
 
-    let server_bin = workspace_bin("spvirit_server");
+    let server_bin = workspace_bin("spserver");
     let mut child = Command::new(server_bin)
         .arg("--db-file")
         .arg(&db_path)
@@ -223,7 +223,7 @@ async fn pvmonitor_integration_optional() {
     thread::sleep(Duration::from_millis(300));
 
     let server_addr = format!("127.0.0.1:{}", tcp_port);
-    let pvmonitor_bin = workspace_bin("spvirit_monitor");
+    let pvmonitor_bin = workspace_bin("spmonitor");
     let mut monitor = Command::new(pvmonitor_bin)
         .arg("--server")
         .arg(&server_addr)
@@ -283,7 +283,7 @@ async fn pvput_readonly_input_denied() {
     };
     let db_path = write_temp_db();
 
-    let server_bin = workspace_bin("spvirit_server");
+    let server_bin = workspace_bin("spserver");
     let mut child = Command::new(server_bin)
         .arg("--db-file")
         .arg(&db_path)
@@ -333,7 +333,7 @@ async fn pvput_ai_simulation_allowed() {
     };
     let db_path = write_temp_db();
 
-    let server_bin = workspace_bin("spvirit_server");
+    let server_bin = workspace_bin("spserver");
     let mut child = Command::new(server_bin)
         .arg("--db-file")
         .arg(&db_path)
