@@ -49,6 +49,7 @@ pub struct ChannelConn {
     pub sid: u32,
     pub version: u8,
     pub is_be: bool,
+    pub server_addr: std::net::SocketAddr,
 }
 
 pub async fn establish_channel(
@@ -129,6 +130,7 @@ pub async fn establish_channel(
         sid,
         version,
         is_be,
+        server_addr: target,
     })
 }
 
@@ -141,6 +143,7 @@ pub async fn pvget(opts: &PvGetOptions) -> Result<PvGetResult, PvGetError> {
         sid,
         version,
         is_be,
+        ..
     } = conn;
 
     let ioid = 1u32;

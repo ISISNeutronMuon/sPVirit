@@ -52,6 +52,7 @@ async fn pvinfo_no_field_name(opts: &PvGetOptions) -> Result<StructureDesc, PvGe
         sid,
         version,
         is_be,
+        ..
     } = establish_channel(target, opts).await?;
 
     let get_field = encode_get_field_request_without_field_name(sid, version, is_be);
