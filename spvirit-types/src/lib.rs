@@ -424,6 +424,32 @@ pub struct NtNdArray {
 }
 
 impl NtNdArray {
+    /// Empty NTNDArray with no data — used for type introspection before
+    /// any image has been acquired.
+    pub fn empty() -> Self {
+        Self {
+            value: ScalarArrayValue::U8(vec![]),
+            codec: NdCodec {
+                name: String::new(),
+                parameters: Default::default(),
+            },
+            compressed_size: 0,
+            uncompressed_size: 0,
+            dimension: vec![],
+            unique_id: 0,
+            data_time_stamp: NtTimeStamp {
+                seconds_past_epoch: 0,
+                nanoseconds: 0,
+                user_tag: 0,
+            },
+            attribute: vec![],
+            descriptor: None,
+            alarm: None,
+            time_stamp: None,
+            display: None,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self
             .attribute

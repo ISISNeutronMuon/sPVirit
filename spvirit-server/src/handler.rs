@@ -1034,25 +1034,34 @@ pub async fn handle_connection<S: PvStore>(
                 match payload.command {
                     10 => {
                         // GET
-                        let Some(nt) = get_nt_snapshot(&state, &pv_name).await else {
-                            state
-                                .registry
-                                .send_msg(
-                                    conn_id,
-                                    encode_op_error(
-                                        payload.command,
-                                        payload.subcmd,
-                                        ioid,
-                                        "PV not found",
-                                        version,
-                                        is_be,
-                                    ),
-                                )
-                                .await;
-                            continue;
-                        };
                         if is_init {
-                            let full_desc = nt_payload_desc(&nt);
+                            // Init only needs the type descriptor, not the data.
+                            // Use get_descriptor first; fall back to snapshot.
+                            let full_desc = if let Some(desc) =
+                                state.store.get_descriptor(&pv_name).await
+                            {
+                                desc
+                            } else if let Some(nt) =
+                                get_nt_snapshot(&state, &pv_name).await
+                            {
+                                nt_payload_desc(&nt)
+                            } else {
+                                state
+                                    .registry
+                                    .send_msg(
+                                        conn_id,
+                                        encode_op_error(
+                                            payload.command,
+                                            payload.subcmd,
+                                            ioid,
+                                            "PV not found",
+                                            version,
+                                            is_be,
+                                        ),
+                                    )
+                                    .await;
+                                continue;
+                            };
                             let pv_req_fields = decode_pv_request_fields(&payload.body, is_be);
                             let desc = match &pv_req_fields {
                                 Some(fields) => filter_structure_desc(&full_desc, fields),
@@ -1071,6 +1080,23 @@ pub async fn handle_connection<S: PvStore>(
                             state.registry.send_msg(conn_id, resp).await;
                             info!("Conn {}: get init pv='{}' ioid={}", conn_id, pv_name, ioid);
                         } else {
+                            let Some(nt) = get_nt_snapshot(&state, &pv_name).await else {
+                                state
+                                    .registry
+                                    .send_msg(
+                                        conn_id,
+                                        encode_op_error(
+                                            payload.command,
+                                            payload.subcmd,
+                                            ioid,
+                                            "PV has no data yet",
+                                            version,
+                                            is_be,
+                                        ),
+                                    )
+                                    .await;
+                                continue;
+                            };
                             let resp = if let Some(desc) = conn_state.ioid_to_desc.get(&ioid) {
                                 encode_op_data_response_filtered(
                                     10, ioid, &nt, desc, version, is_be,
