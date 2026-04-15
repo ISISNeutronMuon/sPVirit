@@ -293,11 +293,17 @@ impl fmt::Display for DecodedValue {
 /// PVD Decoder state
 pub struct PvdDecoder {
     is_be: bool,
+    /// IntrospectionRegistry: maps int16 keys to previously seen FieldTypes.
+    /// Populated when parsing `0xFD` (full-with-id) entries, looked up on `0xFE` (only-id).
+    registry: std::cell::RefCell<std::collections::HashMap<u16, FieldType>>,
 }
 
 impl PvdDecoder {
     pub fn new(is_be: bool) -> Self {
-        Self { is_be }
+        Self {
+            is_be,
+            registry: std::cell::RefCell::new(std::collections::HashMap::new()),
+        }
     }
 
     /// Decode a size value (PVA variable-length encoding)
@@ -382,24 +388,36 @@ impl PvdDecoder {
         // Full-with-id from IntrospectionRegistry:
         // 0xFD + int16 key + type descriptor payload.
         if type_byte == 0xFD {
-            if data.len() < 4 {
+            if data.len() < 3 {
                 return None;
             }
-            // Preferred parsing path: skip tag + int16 key.
+            let key = if self.is_be {
+                u16::from_be_bytes([data[1], data[2]])
+            } else {
+                u16::from_le_bytes([data[1], data[2]])
+            };
             if let Some((field_type, consumed)) = self.parse_type_desc(&data[3..]) {
+                self.registry.borrow_mut().insert(key, field_type.clone());
                 return Some((field_type, 3 + consumed));
-            }
-            // Legacy fallback for older non-keyed streams.
-            if let Some((field_type, consumed)) = self.parse_type_desc(&data[1..]) {
-                return Some((field_type, 1 + consumed));
             }
             return None;
         }
 
         // Only-id from IntrospectionRegistry:
-        // 0xFE + int16 key, requires connection-level registry state.
+        // 0xFE + int16 key — reference to a previously seen type.
         if type_byte == 0xFE {
-            debug!("Type descriptor uses ONLY_ID (0xFE) without registry context");
+            if data.len() < 3 {
+                return None;
+            }
+            let key = if self.is_be {
+                u16::from_be_bytes([data[1], data[2]])
+            } else {
+                u16::from_le_bytes([data[1], data[2]])
+            };
+            if let Some(ft) = self.registry.borrow().get(&key) {
+                return Some((ft.clone(), 3));
+            }
+            debug!("Type descriptor ONLY_ID (0xFE) key={} not found in registry", key);
             return None;
         }
 
@@ -549,26 +567,49 @@ impl PvdDecoder {
         // Full-with-id from IntrospectionRegistry:
         // 0xFD + int16 key + field type descriptor payload.
         if type_byte == 0xFD {
-            if data.len() < 4 {
+            if data.len() < 3 {
                 return None;
             }
-            // Preferred parsing path: skip tag + int16 key.
+            let key = if self.is_be {
+                u16::from_be_bytes([data[1], data[2]])
+            } else {
+                u16::from_le_bytes([data[1], data[2]])
+            };
             if let Some((desc, consumed)) = self.parse_introspection_with_len(&data[3..]) {
+                // Register this structure type for later 0xFE references
+                if !desc.fields.is_empty() {
+                    self.registry.borrow_mut().insert(
+                        key,
+                        FieldType::Structure(desc.clone()),
+                    );
+                } else {
+                    self.registry.borrow_mut().insert(
+                        key,
+                        FieldType::Structure(desc.clone()),
+                    );
+                }
                 return Some((desc, 3 + consumed));
-            }
-            // Legacy fallback for older non-keyed streams.
-            if let Some((desc, consumed)) = self.parse_introspection_with_len(&data[1..]) {
-                return Some((desc, 1 + consumed));
             }
             return None;
         }
 
         // Only-id from IntrospectionRegistry:
-        // 0xFE + int16 key, requires connection-level registry state.
+        // 0xFE + int16 key — reference to a previously seen type.
         if type_byte == 0xFE {
-            debug!(
-                "Introspection uses ONLY_ID (0xFE), but no registry is available in this decoder"
-            );
+            if data.len() < 3 {
+                return None;
+            }
+            let key = if self.is_be {
+                u16::from_be_bytes([data[1], data[2]])
+            } else {
+                u16::from_le_bytes([data[1], data[2]])
+            };
+            if let Some(ft) = self.registry.borrow().get(&key) {
+                if let FieldType::Structure(desc) = ft {
+                    return Some((desc.clone(), 3));
+                }
+            }
+            debug!("Introspection ONLY_ID (0xFE) key={} not found in registry", key);
             return None;
         }
 

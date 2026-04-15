@@ -889,6 +889,10 @@ fn encode_codec_parameters(
     out
 }
 
+pub fn nt_ndarray_desc_default() -> StructureDesc {
+    nt_ndarray_desc(&NtNdArray::empty())
+}
+
 pub fn nt_ndarray_desc(_nt: &NtNdArray) -> StructureDesc {
     StructureDesc {
         struct_id: Some("epics:nt/NTNDArray:1.0".to_string()),

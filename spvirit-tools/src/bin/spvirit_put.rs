@@ -98,6 +98,7 @@ async fn pvput_full_flow(opts: &PvGetOptions, input: &Value) -> Result<(), PvGet
         sid,
         version,
         is_be,
+        ..
     } = conn;
 
     run_get_cycle(&mut stream, opts.timeout, sid, 1u32, version, is_be).await?;

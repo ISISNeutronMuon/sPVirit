@@ -47,6 +47,7 @@ async fn pvmonitor_raw(opts: PvGetOptions, json: bool) -> Result<(), PvGetError>
         sid,
         version,
         is_be,
+        ..
     } = conn;
 
     let ioid = 1u32;

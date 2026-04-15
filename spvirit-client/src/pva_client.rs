@@ -233,6 +233,16 @@ impl PvaClient {
         low_level_pvget(&opts).await
     }
 
+    /// Fetch a PV with field filtering (equivalent to `pvget -r "field(value,alarm)"`).
+    pub async fn pvget_fields(
+        &self,
+        pv_name: &str,
+        fields: &[&str],
+    ) -> Result<PvGetResult, PvGetError> {
+        let opts = self.opts(pv_name);
+        crate::client::pvget_fields(&opts, fields).await
+    }
+
     // ─── pvput ───────────────────────────────────────────────────────────
 
     /// Write a value to a PV.
@@ -250,6 +260,7 @@ impl PvaClient {
             sid,
             version: _,
             is_be,
+            ..
         } = self.open_channel(pv_name).await?;
 
         let ioid = alloc_ioid();
@@ -298,6 +309,7 @@ impl PvaClient {
             sid,
             version,
             is_be,
+            ..
         } = self.open_channel(pv_name).await?;
 
         let ioid = alloc_ioid();
@@ -383,6 +395,7 @@ impl PvaClient {
             sid,
             version: _,
             is_be,
+            ..
         } = self.open_channel(pv_name).await?;
 
         let ioid = alloc_ioid();
@@ -445,11 +458,21 @@ impl PvaClient {
 
     /// Retrieve the field/structure description (introspection) for a PV.
     pub async fn pvinfo(&self, pv_name: &str) -> Result<StructureDesc, PvGetError> {
+        let result = self.pvinfo_full(pv_name).await?;
+        Ok(result.0)
+    }
+
+    /// Retrieve introspection and server address for a PV.
+    pub async fn pvinfo_full(
+        &self,
+        pv_name: &str,
+    ) -> Result<(StructureDesc, SocketAddr), PvGetError> {
         let ChannelConn {
             mut stream,
             sid,
             version: _,
             is_be,
+            server_addr,
         } = self.open_channel(pv_name).await?;
 
         let ioid = alloc_ioid();
@@ -459,11 +482,34 @@ impl PvaClient {
         let resp_bytes = read_until(
             &mut stream,
             self.timeout,
-            |cmd| matches!(cmd, PvaPacketCommand::Op(op) if op.command == 17),
+            |cmd| matches!(cmd, PvaPacketCommand::GetField(_)),
         )
         .await?;
 
-        decode_init_introspection(&resp_bytes, "GET_FIELD")
+        let mut pkt = PvaPacket::new(&resp_bytes);
+        let cmd = pkt
+            .decode_payload()
+            .ok_or_else(|| PvGetError::Decode("GET_FIELD response decode failed".to_string()))?;
+        match cmd {
+            PvaPacketCommand::GetField(payload) => {
+                if let Some(ref st) = payload.status {
+                    if st.is_error() {
+                        let msg = st
+                            .message
+                            .clone()
+                            .unwrap_or_else(|| format!("code={}", st.code));
+                        return Err(PvGetError::Protocol(format!("GET_FIELD error: {msg}")));
+                    }
+                }
+                let desc = payload
+                    .introspection
+                    .ok_or_else(|| PvGetError::Decode("missing GET_FIELD introspection".to_string()))?;
+                Ok((desc, server_addr))
+            }
+            _ => Err(PvGetError::Protocol(
+                "unexpected GET_FIELD response".to_string(),
+            )),
+        }
     }
 
     // ─── pvlist ──────────────────────────────────────────────────────────

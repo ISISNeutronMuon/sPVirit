@@ -306,6 +306,7 @@ async fn list_pvs_via_server_rpc_channel(
         sid,
         version,
         is_be,
+        ..
     } = establish_channel(server_addr, &rpc_opts).await?;
 
     let ioid = 1u32;
@@ -421,6 +422,7 @@ pub async fn list_pvs_via_server_get(
             sid,
             version,
             is_be,
+            ..
         } = establish_channel(server_addr, &get_opts).await?;
 
         let ioid = 1u32;
