@@ -812,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "spvirit-client"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "chrono",
  "dns-lookup",
@@ -827,7 +827,7 @@ dependencies = [
 
 [[package]]
 name = "spvirit-codec"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "hex",
  "spvirit-types",
@@ -836,7 +836,7 @@ dependencies = [
 
 [[package]]
 name = "spvirit-server"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "get_if_addrs",
  "regex",
@@ -851,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "spvirit-tools"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "argparse",
  "chrono",
@@ -874,7 +874,7 @@ dependencies = [
 
 [[package]]
 name = "spvirit-types"
-version = "0.1.8"
+version = "0.1.9"
 
 [[package]]
 name = "static_assertions"
