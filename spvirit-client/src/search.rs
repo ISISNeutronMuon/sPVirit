@@ -373,35 +373,16 @@ pub async fn search_pv(
     let mut socket_info: Vec<(Arc<UdpSocket>, Vec<u8>, Vec<SocketAddr>)> = Vec::new();
 
     for (bind_ip, group_targets) in &bind_groups {
-        let bind_addr = SocketAddr::new(*bind_ip, udp_port);
+        // Always use an ephemeral port for the search client socket.
+        // We only receive unicast replies, so sharing the server's search
+        // port is unnecessary — and on Linux with SO_REUSEPORT the kernel
+        // would route our own outbound packet back to us instead of the
+        // server.
+        let bind_addr = SocketAddr::new(*bind_ip, 0);
         let (std_sock, actual_bind_addr) = match bind_udp_reuse(bind_addr) {
-            Ok(sock) => (sock, bind_addr),
-            Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
-                let fallback = SocketAddr::new(*bind_ip, 0);
-                match bind_udp_reuse(fallback) {
-                    Ok(sock) => {
-                        let actual = sock.local_addr().unwrap_or(fallback);
-                        if debug_enabled {
-                            debug!(
-                                "pva search bind={} failed (in use), fallback bind={}",
-                                bind_addr, actual
-                            );
-                        }
-                        (sock, actual)
-                    }
-                    Err(fallback_err) => {
-                        if debug_enabled {
-                            debug!(
-                                "pva search skipping bind={} step=bind-fallback kind={:?} err={}",
-                                bind_addr,
-                                fallback_err.kind(),
-                                fallback_err
-                            );
-                        }
-                        last_io_error = Some(fallback_err);
-                        continue;
-                    }
-                }
+            Ok(sock) => {
+                let actual = sock.local_addr().unwrap_or(bind_addr);
+                (sock, actual)
             }
             Err(err) => {
                 if debug_enabled {
@@ -870,35 +851,16 @@ pub async fn discover_servers(
     let mut socket_info: Vec<(Arc<UdpSocket>, Vec<u8>, Vec<SocketAddr>)> = Vec::new();
 
     for (bind_ip, group_targets) in &bind_groups {
-        let bind_addr = SocketAddr::new(*bind_ip, udp_port);
+        // Always use an ephemeral port for the discovery client socket.
+        // We only receive unicast replies, so sharing the server's search
+        // port is unnecessary — and on Linux with SO_REUSEPORT the kernel
+        // would route our own outbound packet back to us instead of the
+        // server.
+        let bind_addr = SocketAddr::new(*bind_ip, 0);
         let (std_sock, actual_bind_addr) = match bind_udp_reuse(bind_addr) {
-            Ok(sock) => (sock, bind_addr),
-            Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
-                let fallback = SocketAddr::new(*bind_ip, 0);
-                match bind_udp_reuse(fallback) {
-                    Ok(sock) => {
-                        let actual = sock.local_addr().unwrap_or(fallback);
-                        if debug_enabled {
-                            debug!(
-                                "pva discover bind={} failed (in use), fallback bind={}",
-                                bind_addr, actual
-                            );
-                        }
-                        (sock, actual)
-                    }
-                    Err(fallback_err) => {
-                        if debug_enabled {
-                            debug!(
-                                "pva discover skipping bind={} step=bind-fallback kind={:?} err={}",
-                                bind_addr,
-                                fallback_err.kind(),
-                                fallback_err
-                            );
-                        }
-                        last_io_error = Some(fallback_err);
-                        continue;
-                    }
-                }
+            Ok(sock) => {
+                let actual = sock.local_addr().unwrap_or(bind_addr);
+                (sock, actual)
             }
             Err(err) => {
                 if debug_enabled {

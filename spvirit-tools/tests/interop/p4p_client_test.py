@@ -5,8 +5,8 @@ Exercises p4p (pvxs) client operations against a running spvirit server.
 Expects the server to already be running with the test DB (SIM:* PVs).
 
 Environment variables:
-    SPVIRIT_TEST_TCP_PORT  – TCP port of the spvirit server (required)
-    SPVIRIT_TEST_UDP_PORT  – UDP port of the spvirit server (required)
+    SPVIRIT_TEST_TCP_PORT  - TCP port of the spvirit server (required)
+    SPVIRIT_TEST_UDP_PORT  - UDP port of the spvirit server (required)
 
 Exit code 0 on success, 1 on any failure.
 """
