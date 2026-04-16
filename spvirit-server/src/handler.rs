@@ -247,6 +247,28 @@ pub fn search_reply_target(addr: &[u8; 16], port: u16, peer: SocketAddr) -> Sock
     SocketAddr::new(target_ip, target_port)
 }
 
+/// Bind the fixed UDP search port with `SO_REUSEADDR` (and `SO_REUSEPORT`
+/// on Unix) so other local PVA consumers such as `p4p` can also listen on
+/// the same well-known port. On macOS in particular, a plain
+/// `UdpSocket::bind(5076)` prevents any subsequent binder from joining the
+/// port, which broke co-located clients.
+pub fn bind_udp_search_socket(addr: SocketAddr) -> std::io::Result<UdpSocket> {
+    use socket2::{Domain, Protocol, Socket, Type};
+
+    let domain = if addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_reuse_address(true)?;
+    #[cfg(unix)]
+    socket.set_reuse_port(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&addr.into())?;
+    UdpSocket::from_std(socket.into())
+}
+
 pub fn infer_udp_response_ip(peer: SocketAddr) -> Option<IpAddr> {
     let bind_addr = if peer.is_ipv4() {
         "0.0.0.0:0"
@@ -606,7 +628,7 @@ pub async fn run_udp_search<S: PvStore>(
     guid: [u8; 12],
     advertise_ip: Option<IpAddr>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let socket = UdpSocket::bind(addr).await?;
+    let socket = bind_udp_search_socket(addr)?;
     socket.set_broadcast(true)?;
     let mut buf = vec![0u8; 4096];
 
@@ -1123,7 +1145,16 @@ pub async fn handle_connection<S: PvStore>(
                     11 => {
                         // PUT
                         if is_init {
-                            let Some(nt) = get_nt_snapshot(&state, &pv_name).await else {
+                            // Init only needs the type descriptor, not current data.
+                            // Use get_descriptor first; fall back to snapshot so PUT
+                            // can target PVs that do not yet have any data.
+                            let desc = if let Some(desc) =
+                                state.store.get_descriptor(&pv_name).await
+                            {
+                                desc
+                            } else if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
+                                nt_payload_desc(&nt)
+                            } else {
                                 state
                                     .registry
                                     .send_msg(
@@ -1153,7 +1184,6 @@ pub async fn handle_connection<S: PvStore>(
                                 state.registry.send_msg(conn_id, resp).await;
                                 continue;
                             }
-                            let desc = nt_payload_desc(&nt);
                             conn_state.ioid_to_desc.insert(ioid, desc.clone());
                             conn_state.ioid_to_pv.insert(ioid, pv_name.clone());
                             let resp = encode_op_init_response_desc(
@@ -1271,7 +1301,16 @@ pub async fn handle_connection<S: PvStore>(
                     12 => {
                         // PUT_GET
                         if is_init {
-                            let Some(nt) = get_nt_snapshot(&state, &pv_name).await else {
+                            // Init only needs the type descriptor, not current data.
+                            // Use get_descriptor first; fall back to snapshot so that
+                            // clients can initiate PUT_GET before any data exists.
+                            let desc = if let Some(desc) =
+                                state.store.get_descriptor(&pv_name).await
+                            {
+                                desc
+                            } else if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
+                                nt_payload_desc(&nt)
+                            } else {
                                 state
                                     .registry
                                     .send_msg(
@@ -1300,7 +1339,6 @@ pub async fn handle_connection<S: PvStore>(
                                 state.registry.send_msg(conn_id, resp).await;
                                 continue;
                             }
-                            let desc = nt_payload_desc(&nt);
                             conn_state.ioid_to_desc.insert(ioid, desc.clone());
                             conn_state.ioid_to_pv.insert(ioid, pv_name.clone());
                             let resp =
@@ -1391,7 +1429,20 @@ pub async fn handle_connection<S: PvStore>(
                     13 => {
                         // MONITOR
                         if is_init {
-                            let Some(nt) = get_nt_snapshot(&state, &pv_name).await else {
+                            // Init only needs the type descriptor, not the data.
+                            // Use get_descriptor first; fall back to snapshot. This
+                            // lets clients subscribe to PVs before any data has been
+                            // produced (e.g. NTNDArray before acquire). Real monitor
+                            // updates are pushed once data arrives. Strict clients
+                            // like p4p treat a MONITOR init error as fatal, so we
+                            // must not error out when only the descriptor is known.
+                            let full_desc = if let Some(desc) =
+                                state.store.get_descriptor(&pv_name).await
+                            {
+                                desc
+                            } else if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
+                                nt_payload_desc(&nt)
+                            } else {
                                 state
                                     .registry
                                     .send_msg(
@@ -1408,7 +1459,6 @@ pub async fn handle_connection<S: PvStore>(
                                     .await;
                                 continue;
                             };
-                            let full_desc = nt_payload_desc(&nt);
                             let pv_req_fields = decode_pv_request_fields(&payload.body, is_be);
                             let desc = match &pv_req_fields {
                                 Some(fields) => filter_structure_desc(&full_desc, fields),
