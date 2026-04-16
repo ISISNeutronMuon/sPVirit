@@ -375,7 +375,9 @@ async fn run_udp_search(
     guid: [u8; 12],
     advertise_ip: Option<IpAddr>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let socket = UdpSocket::bind(addr).await?;
+    // Bind with SO_REUSEADDR/SO_REUSEPORT so co-located PVA consumers
+    // (e.g. p4p on macOS) can also listen on the fixed search port.
+    let socket = spvirit_server::handler::bind_udp_search_socket(addr)?;
     socket.set_broadcast(true)?;
     let mut buf = vec![0u8; 4096];
 
