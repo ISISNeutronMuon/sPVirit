@@ -62,9 +62,13 @@ jobs:
       - name: Install p4p
         run: pip install p4p
 
-      - name: Run p4p interop tests
+      - name: Build workspace binaries
+        run: cargo build --all
+
+      - name: Run p4p provider matrix
         env:
           PVA_TEST_P4P: "1"
           P4P_PROVIDER_CMD: "python3 ${{ github.workspace }}/spvirit-tools/tests/interop/p4p_server.py"
           P4P_PROVIDER_READY_MS: "5000"
-        run: cargo test --all
+          P4P_TEST_SERVER: "127.0.0.1:5075"
+        run: cargo test --package spvirit-tools --test interop_tool_matrix -- p4p_provider_matrix
