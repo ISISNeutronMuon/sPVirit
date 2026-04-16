@@ -77,9 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opts = common.into_pv_get_options("__pvlist".to_string())?;
 
     let rt = Runtime::new()?;
-    let discovered = if opts.no_broadcast {
-        Vec::new()
-    } else {
+    let discovered = {
         let targets = build_search_targets(opts.search_addr, opts.bind_addr);
         rt.block_on(discover_servers(
             opts.udp_port,

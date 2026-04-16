@@ -12,7 +12,7 @@ use tracing::{error, info};
 use crate::beacon::{BeaconConfig, run_beacon};
 use crate::handler::{PvListMode, ServerState, rand_guid, run_tcp_server, run_udp_search};
 use crate::monitor::MonitorRegistry;
-use crate::pvstore::PvStore;
+use crate::pvstore::SourceRegistry;
 
 /// Configuration for the PVA server.
 pub struct PvaServerConfig {
@@ -58,28 +58,28 @@ impl Default for PvaServerConfig {
     }
 }
 
-/// Shared server state wrapping a [`PvStore`] implementation.
+/// Shared server state wrapping a [`SourceRegistry`].
 ///
-/// Consumers can hold an `Arc<PvaServerState<S>>` to inspect or mutate the
-/// underlying store while the server tasks are running.
-pub struct PvaServerState<S: PvStore> {
-    pub inner: Arc<ServerState<S>>,
+/// Consumers can hold an `Arc<PvaServerState>` to inspect or mutate the
+/// underlying sources while the server tasks are running.
+pub struct PvaServerState {
+    pub inner: Arc<ServerState>,
     pub registry: Arc<MonitorRegistry>,
 }
 
-impl<S: PvStore> PvaServerState<S> {
-    pub fn new(store: Arc<S>, config: &PvaServerConfig) -> Self {
-        Self::with_registry(store, config, Arc::new(MonitorRegistry::new()))
+impl PvaServerState {
+    pub fn new(sources: Arc<SourceRegistry>, config: &PvaServerConfig) -> Self {
+        Self::with_registry(sources, config, Arc::new(MonitorRegistry::new()))
     }
 
     pub fn with_registry(
-        store: Arc<S>,
+        sources: Arc<SourceRegistry>,
         config: &PvaServerConfig,
         registry: Arc<MonitorRegistry>,
     ) -> Self {
         let guid = rand_guid();
         let inner = Arc::new(ServerState::new(
-            store,
+            sources,
             registry.clone(),
             config.compute_alarms,
             config.pvlist_mode,
@@ -98,21 +98,21 @@ impl<S: PvStore> PvaServerState<S> {
 ///
 /// This function drives the three server tasks in a `tokio::select!` loop and
 /// returns when any task errors or the future is dropped.
-pub async fn run_pva_server<S: PvStore>(
-    store: Arc<S>,
+pub async fn run_pva_server(
+    sources: Arc<SourceRegistry>,
     config: PvaServerConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let registry = Arc::new(MonitorRegistry::new());
-    run_pva_server_with_registry(store, config, registry).await
+    run_pva_server_with_registry(sources, config, registry).await
 }
 
 /// Like [`run_pva_server`] but re-uses an existing [`MonitorRegistry`].
-pub async fn run_pva_server_with_registry<S: PvStore>(
-    store: Arc<S>,
+pub async fn run_pva_server_with_registry(
+    sources: Arc<SourceRegistry>,
     config: PvaServerConfig,
     registry: Arc<MonitorRegistry>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let server_state = PvaServerState::with_registry(store, &config, registry);
+    let server_state = PvaServerState::with_registry(sources, &config, registry);
     let state = server_state.inner;
 
     let guid = state.guid;

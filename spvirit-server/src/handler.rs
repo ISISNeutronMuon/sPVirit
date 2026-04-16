@@ -1,7 +1,7 @@
 //! PVA protocol handler — the core TCP connection processor.
 //!
-//! [`handle_connection`] is generic over [`PvStore`], allowing any backend to
-//! serve PVs over the EPICS PVAccess protocol.
+//! [`handle_connection`] uses a [`SourceRegistry`] to resolve PV names across
+//! multiple registered sources, serving PVs over the EPICS PVAccess protocol.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use spvirit_codec::epics_decode::{PvaHeader, PvaPacket, PvaPacketCommand};
-use spvirit_codec::spvd_decode::{StructureDesc, extract_subfield_desc};
+use spvirit_codec::spvd_decode::{PvdDecoder, StructureDesc, extract_subfield_desc};
 use spvirit_codec::spvd_encode::{
     decode_pv_request_fields, filter_structure_desc, nt_payload_desc,
 };
@@ -36,7 +36,7 @@ use spvirit_types::{NtPayload, NtScalar, NtScalarArray, ScalarArrayValue, Scalar
 
 use crate::decode::{assemble_segmented_message, decode_put_body};
 use crate::monitor::MonitorRegistry;
-use crate::pvstore::PvStore;
+use crate::pvstore::SourceRegistry;
 use crate::state::{ConnState, MonitorState, MonitorSub};
 
 // ---------------------------------------------------------------------------
@@ -69,12 +69,12 @@ impl PvListMode {
 }
 
 // ---------------------------------------------------------------------------
-// Server shared state — generic over PvStore
+// Server shared state
 // ---------------------------------------------------------------------------
 
 /// Shared server state that is passed to every connection handler.
-pub struct ServerState<S: PvStore> {
-    pub store: Arc<S>,
+pub struct ServerState {
+    pub sources: Arc<SourceRegistry>,
     pub registry: Arc<MonitorRegistry>,
     pub sid_counter: AtomicU32,
     pub beacon_change: Arc<AtomicU16>,
@@ -88,9 +88,9 @@ pub struct ServerState<S: PvStore> {
     pub listen_ip: IpAddr,
 }
 
-impl<S: PvStore> ServerState<S> {
+impl ServerState {
     pub fn new(
-        store: Arc<S>,
+        sources: Arc<SourceRegistry>,
         registry: Arc<MonitorRegistry>,
         compute_alarms: bool,
         pvlist_mode: PvListMode,
@@ -102,7 +102,7 @@ impl<S: PvStore> ServerState<S> {
         listen_ip: IpAddr,
     ) -> Self {
         Self {
-            store,
+            sources,
             registry,
             sid_counter: AtomicU32::new(1),
             beacon_change: Arc::new(AtomicU16::new(0)),
@@ -355,15 +355,15 @@ pub fn dump_hex_packet(
 }
 
 // ---------------------------------------------------------------------------
-// Store-based snapshot/writable helpers (delegate to PvStore + virtual PVs)
+// Store-based snapshot/writable helpers (delegate to SourceRegistry + virtual PVs)
 // ---------------------------------------------------------------------------
 
-async fn get_nt_snapshot<S: PvStore>(state: &ServerState<S>, pv_name: &str) -> Option<NtPayload> {
+async fn get_nt_snapshot(state: &ServerState, pv_name: &str) -> Option<NtPayload> {
     if is_pvlist_virtual_pv(pv_name) {
         if state.pvlist_mode != PvListMode::List {
             return None;
         }
-        let all_names = state.store.list_pvs().await;
+        let all_names = state.sources.names().await;
         let names = collect_visible_pv_names(
             &all_names,
             state.pvlist_mode,
@@ -375,18 +375,18 @@ async fn get_nt_snapshot<S: PvStore>(state: &ServerState<S>, pv_name: &str) -> O
     if is_virtual_event_pv(pv_name) {
         return Some(virtual_event_nt(pv_name));
     }
-    state.store.get_snapshot(pv_name).await
+    state.sources.get(pv_name).await
 }
 
-async fn is_writable_pv<S: PvStore>(state: &ServerState<S>, pv_name: &str) -> bool {
+async fn is_writable_pv(state: &ServerState, pv_name: &str) -> bool {
     if is_virtual_event_pv(pv_name) {
         return true;
     }
-    state.store.is_writable(pv_name).await
+    state.sources.is_writable(pv_name).await
 }
 
-async fn has_pv<S: PvStore>(state: &ServerState<S>, pv_name: &str) -> bool {
-    state.store.has_pv(pv_name).await
+async fn has_pv(state: &ServerState, pv_name: &str) -> bool {
+    state.sources.has_pv(pv_name).await
         || is_virtual_event_pv(pv_name)
         || (is_pvlist_virtual_pv(pv_name) && state.pvlist_mode == PvListMode::List)
         || (is_server_rpc_pv(pv_name) && state.pvlist_mode != PvListMode::Off)
@@ -396,8 +396,8 @@ async fn has_pv<S: PvStore>(state: &ServerState<S>, pv_name: &str) -> bool {
 // Notify helpers
 // ---------------------------------------------------------------------------
 
-async fn notify_changed_records<S: PvStore>(
-    state: &ServerState<S>,
+async fn notify_changed_records(
+    state: &ServerState,
     changed: Vec<(String, NtPayload)>,
 ) {
     for (name, payload) in changed {
@@ -410,8 +410,8 @@ async fn notify_changed_records<S: PvStore>(
 // GET_FIELD handler
 // ---------------------------------------------------------------------------
 
-async fn handle_get_field_request<S: PvStore>(
-    state: &ServerState<S>,
+async fn handle_get_field_request(
+    state: &ServerState,
     conn_state: &ConnState,
     conn_id: u64,
     payload: spvirit_codec::epics_decode::PvaGetFieldPayload,
@@ -511,7 +511,7 @@ async fn handle_get_field_request<S: PvStore>(
         return;
     };
 
-    let all_names = state.store.list_pvs().await;
+    let all_names = state.sources.names().await;
     let mut names = collect_visible_pv_names(
         &all_names,
         state.pvlist_mode,
@@ -550,8 +550,8 @@ async fn handle_get_field_request<S: PvStore>(
 // Server RPC handler
 // ---------------------------------------------------------------------------
 
-async fn handle_server_rpc<S: PvStore>(
-    state: &ServerState<S>,
+async fn handle_server_rpc(
+    state: &ServerState,
     conn_id: u64,
     ioid: u32,
     subcmd: u8,
@@ -571,7 +571,7 @@ async fn handle_server_rpc<S: PvStore>(
         return;
     }
 
-    let all_names = state.store.list_pvs().await;
+    let all_names = state.sources.names().await;
     let names = collect_visible_pv_names(
         &all_names,
         state.pvlist_mode,
@@ -595,8 +595,8 @@ async fn handle_server_rpc<S: PvStore>(
 // Control message handler (inside segmented stream)
 // ---------------------------------------------------------------------------
 
-async fn handle_control_message<S: PvStore>(
-    state: &ServerState<S>,
+async fn handle_control_message(
+    state: &ServerState,
     conn_id: u64,
     header: &PvaHeader,
 ) {
@@ -621,8 +621,8 @@ async fn handle_control_message<S: PvStore>(
 // ---------------------------------------------------------------------------
 
 /// Run the UDP search responder.
-pub async fn run_udp_search<S: PvStore>(
-    state: Arc<ServerState<S>>,
+pub async fn run_udp_search(
+    state: Arc<ServerState>,
     addr: SocketAddr,
     tcp_port: u16,
     guid: [u8; 12],
@@ -662,7 +662,7 @@ pub async fn run_udp_search<S: PvStore>(
                     debug!("UDP search: no compatible protocol (tcp not accepted)");
                     continue;
                 }
-                let all_names = state.store.list_pvs().await;
+                let all_names = state.sources.names().await;
                 let visible_names = collect_visible_pv_names(
                     &all_names,
                     state.pvlist_mode,
@@ -671,7 +671,7 @@ pub async fn run_udp_search<S: PvStore>(
                 );
                 let mut cids = Vec::new();
                 for (cid, name) in &payload.pv_requests {
-                    if state.store.has_pv(name).await
+                    if state.sources.has_pv(name).await
                         || is_virtual_event_pv(name)
                         || (is_pvlist_virtual_pv(name) && state.pvlist_mode == PvListMode::List)
                         || (is_server_rpc_pv(name) && state.pvlist_mode != PvListMode::Off)
@@ -747,8 +747,8 @@ pub async fn run_udp_search<S: PvStore>(
 // ---------------------------------------------------------------------------
 
 /// Accept TCP connections and spawn a handler for each.
-pub async fn run_tcp_server<S: PvStore>(
-    state: Arc<ServerState<S>>,
+pub async fn run_tcp_server(
+    state: Arc<ServerState>,
     addr: SocketAddr,
     conn_timeout: Duration,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -776,9 +776,9 @@ pub async fn run_tcp_server<S: PvStore>(
 ///
 /// This is the main protocol loop: handshake, then dispatch each command
 /// (CreateChannel, GET, PUT, PUT_GET, MONITOR, RPC, etc.) using the
-/// [`PvStore`] abstraction.
-pub async fn handle_connection<S: PvStore>(
-    state: Arc<ServerState<S>>,
+/// [`SourceRegistry`] abstraction.
+pub async fn handle_connection(
+    state: Arc<ServerState>,
     stream: TcpStream,
     conn_id: u64,
     conn_timeout: Duration,
@@ -1072,7 +1072,7 @@ pub async fn handle_connection<S: PvStore>(
                             // Init only needs the type descriptor, not the data.
                             // Use get_descriptor first; fall back to snapshot.
                             let full_desc = if let Some(desc) =
-                                state.store.get_descriptor(&pv_name).await
+                                state.sources.get_descriptor(&pv_name).await
                             {
                                 desc
                             } else if let Some(nt) =
@@ -1149,7 +1149,7 @@ pub async fn handle_connection<S: PvStore>(
                             // Use get_descriptor first; fall back to snapshot so PUT
                             // can target PVs that do not yet have any data.
                             let desc = if let Some(desc) =
-                                state.store.get_descriptor(&pv_name).await
+                                state.sources.get_descriptor(&pv_name).await
                             {
                                 desc
                             } else if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
@@ -1260,7 +1260,7 @@ pub async fn handle_connection<S: PvStore>(
                             };
                             let decoded = decode_put_body(&payload.body, &desc, is_be);
                             if let Some(value) = decoded.as_ref() {
-                                match state.store.put_value(&pv_name, value).await {
+                                match state.sources.put(&pv_name, value).await {
                                     Ok(changed) => {
                                         notify_changed_records(&state, changed).await;
                                     }
@@ -1305,7 +1305,7 @@ pub async fn handle_connection<S: PvStore>(
                             // Use get_descriptor first; fall back to snapshot so that
                             // clients can initiate PUT_GET before any data exists.
                             let desc = if let Some(desc) =
-                                state.store.get_descriptor(&pv_name).await
+                                state.sources.get_descriptor(&pv_name).await
                             {
                                 desc
                             } else if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
@@ -1371,7 +1371,7 @@ pub async fn handle_connection<S: PvStore>(
                             };
                             let decoded = decode_put_body(&payload.body, &desc, is_be);
                             if let Some(value) = decoded.as_ref() {
-                                match state.store.put_value(&pv_name, value).await {
+                                match state.sources.put(&pv_name, value).await {
                                     Ok(changed) => {
                                         notify_changed_records(&state, changed).await;
                                     }
@@ -1437,7 +1437,7 @@ pub async fn handle_connection<S: PvStore>(
                             // like p4p treat a MONITOR init error as fatal, so we
                             // must not error out when only the descriptor is known.
                             let full_desc = if let Some(desc) =
-                                state.store.get_descriptor(&pv_name).await
+                                state.sources.get_descriptor(&pv_name).await
                             {
                                 desc
                             } else if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
@@ -1635,20 +1635,63 @@ pub async fn handle_connection<S: PvStore>(
                             )
                             .await;
                         } else {
-                            state
-                                .registry
-                                .send_msg(
-                                    conn_id,
-                                    encode_op_error(
-                                        payload.command,
-                                        payload.subcmd,
-                                        ioid,
-                                        "Operation not supported",
-                                        version,
-                                        is_be,
-                                    ),
-                                )
-                                .await;
+                            let is_init = (payload.subcmd & 0x08) != 0;
+                            if is_init {
+                                // RPC INIT — acknowledge with status OK
+                                let resp = encode_op_status_response(
+                                    20,
+                                    ioid,
+                                    payload.subcmd,
+                                    version,
+                                    is_be,
+                                );
+                                state.registry.send_msg(conn_id, resp).await;
+                            } else {
+                                // RPC EXEC — decode self-describing PVD args and
+                                // delegate to the source registry
+                                let decoder = PvdDecoder::new(is_be);
+                                let args = if !payload.body.is_empty() {
+                                    decoder
+                                        .parse_introspection_with_len(&payload.body)
+                                        .and_then(|(desc, consumed)| {
+                                            decoder
+                                                .decode_structure(
+                                                    &payload.body[consumed..],
+                                                    &desc,
+                                                )
+                                                .map(|(val, _)| val)
+                                        })
+                                } else {
+                                    None
+                                };
+                                let empty =
+                                    spvirit_codec::spvd_decode::DecodedValue::Structure(vec![]);
+                                let args_ref = args.as_ref().unwrap_or(&empty);
+                                match state.sources.rpc(&pv_name, args_ref).await {
+                                    Ok(result) => {
+                                        let resp =
+                                            encode_op_rpc_data_response_payload(
+                                                ioid,
+                                                payload.subcmd,
+                                                &result,
+                                                version,
+                                                is_be,
+                                            );
+                                        state.registry.send_msg(conn_id, resp).await;
+                                    }
+                                    Err(msg) => {
+                                        let resp = encode_op_status_error_response(
+                                            20,
+                                            ioid,
+                                            payload.subcmd,
+                                            &msg,
+                                            version,
+                                            is_be,
+                                        );
+                                        state.registry.send_msg(conn_id, resp).await;
+                                    }
+                                }
+                            }
                         }
                     }
                     14 | 16 => {
@@ -1758,7 +1801,7 @@ pub async fn handle_connection<S: PvStore>(
                         .iter()
                         .any(|p| p.eq_ignore_ascii_case("tcp"));
                 if accepts_tcp {
-                    let all_names = state.store.list_pvs().await;
+                    let all_names = state.sources.names().await;
                     let visible_names = collect_visible_pv_names(
                         &all_names,
                         state.pvlist_mode,
@@ -1767,7 +1810,7 @@ pub async fn handle_connection<S: PvStore>(
                     );
                     let mut cids = Vec::new();
                     for (cid, name) in &payload.pv_requests {
-                        if state.store.has_pv(name).await
+                        if state.sources.has_pv(name).await
                             || is_virtual_event_pv(name)
                             || (is_pvlist_virtual_pv(name)
                                 && state.pvlist_mode == PvListMode::List)

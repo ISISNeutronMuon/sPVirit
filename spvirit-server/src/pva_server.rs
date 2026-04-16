@@ -22,11 +22,12 @@ use std::time::Duration;
 use regex::Regex;
 use tracing::info;
 
-use spvirit_types::{NtEnum, NtScalar, NtScalarArray, PvValue, ScalarArrayValue, ScalarValue};
+use spvirit_types::{NtEnum, NtScalar, NtScalarArray, NtTable as NtTableType, NtTableColumn, NtNdArray as NtNdArrayType, NdCodec, NdDimension, NtTimeStamp, PvValue, ScalarArrayValue, ScalarValue};
 
 use crate::db::{load_db, parse_db};
 use crate::handler::PvListMode;
 use crate::monitor::MonitorRegistry;
+use crate::pvstore::{Source, SourceRegistry};
 use crate::server::{PvaServerConfig, run_pva_server_with_registry};
 use crate::simple_store::{LinkDef, OnPutCallback, ScanCallback, SimplePvStore};
 use crate::types::{DbCommonState, OutputMode, RecordData, RecordInstance, RecordType};
@@ -48,6 +49,7 @@ pub struct PvaServerBuilder {
     on_put: HashMap<String, OnPutCallback>,
     scans: Vec<(String, Duration, ScanCallback)>,
     links: Vec<LinkDef>,
+    extra_sources: Vec<(String, i32, Arc<dyn Source>)>,
     tcp_port: u16,
     udp_port: u16,
     listen_ip: Option<IpAddr>,
@@ -67,6 +69,7 @@ impl PvaServerBuilder {
             on_put: HashMap::new(),
             scans: Vec::new(),
             links: Vec::new(),
+            extra_sources: Vec::new(),
             tcp_port: 5075,
             udp_port: 5076,
             listen_ip: None,
@@ -167,6 +170,183 @@ impl PvaServerBuilder {
                     ftvl,
                     nelm,
                     nord: nelm,
+                },
+                raw_fields: HashMap::new(),
+            },
+        );
+        self
+    }
+
+    /// Add an `aai` (analog array input, read-only) record.
+    pub fn aai(mut self, name: impl Into<String>, data: ScalarArrayValue) -> Self {
+        let name = name.into();
+        let ftvl = data.type_label().trim_end_matches("[]").to_string();
+        let nelm = data.len();
+        self.records.insert(
+            name.clone(),
+            RecordInstance {
+                name: name.clone(),
+                record_type: RecordType::Aai,
+                common: DbCommonState::default(),
+                data: RecordData::Aai {
+                    nt: NtScalarArray::from_value(data),
+                    inp: None,
+                    ftvl,
+                    nelm,
+                    nord: nelm,
+                },
+                raw_fields: HashMap::new(),
+            },
+        );
+        self
+    }
+
+    /// Add an `aao` (analog array output, writable) record.
+    pub fn aao(mut self, name: impl Into<String>, data: ScalarArrayValue) -> Self {
+        let name = name.into();
+        let ftvl = data.type_label().trim_end_matches("[]").to_string();
+        let nelm = data.len();
+        self.records.insert(
+            name.clone(),
+            RecordInstance {
+                name: name.clone(),
+                record_type: RecordType::Aao,
+                common: DbCommonState::default(),
+                data: RecordData::Aao {
+                    nt: NtScalarArray::from_value(data),
+                    out: None,
+                    dol: None,
+                    omsl: OutputMode::Supervisory,
+                    ftvl,
+                    nelm,
+                    nord: nelm,
+                },
+                raw_fields: HashMap::new(),
+            },
+        );
+        self
+    }
+
+    /// Add a `subarray` record — a view into part of an array.
+    pub fn sub_array(
+        mut self,
+        name: impl Into<String>,
+        data: ScalarArrayValue,
+        indx: usize,
+        nelm: usize,
+    ) -> Self {
+        let name = name.into();
+        let ftvl = data.type_label().trim_end_matches("[]").to_string();
+        let malm = data.len();
+        let nord = nelm.min(malm.saturating_sub(indx));
+        self.records.insert(
+            name.clone(),
+            RecordInstance {
+                name: name.clone(),
+                record_type: RecordType::SubArray,
+                common: DbCommonState::default(),
+                data: RecordData::SubArray {
+                    nt: NtScalarArray::from_value(data),
+                    inp: None,
+                    ftvl,
+                    malm,
+                    nelm,
+                    nord,
+                    indx,
+                },
+                raw_fields: HashMap::new(),
+            },
+        );
+        self
+    }
+
+    /// Add an NTTable record.
+    pub fn nt_table(
+        mut self,
+        name: impl Into<String>,
+        columns: Vec<(String, ScalarArrayValue)>,
+    ) -> Self {
+        let name = name.into();
+        let labels: Vec<String> = columns.iter().map(|(n, _)| n.clone()).collect();
+        let cols: Vec<NtTableColumn> = columns
+            .into_iter()
+            .map(|(n, v)| NtTableColumn { name: n, values: v })
+            .collect();
+        self.records.insert(
+            name.clone(),
+            RecordInstance {
+                name: name.clone(),
+                record_type: RecordType::NtTable,
+                common: DbCommonState::default(),
+                data: RecordData::NtTable {
+                    nt: NtTableType {
+                        labels,
+                        columns: cols,
+                        descriptor: None,
+                        alarm: None,
+                        time_stamp: None,
+                    },
+                    inp: None,
+                    out: None,
+                    omsl: OutputMode::Supervisory,
+                },
+                raw_fields: HashMap::new(),
+            },
+        );
+        self
+    }
+
+    /// Add an NTNDArray record.
+    pub fn nt_ndarray(
+        mut self,
+        name: impl Into<String>,
+        data: ScalarArrayValue,
+        dims: Vec<(i32, i32)>,
+    ) -> Self {
+        let name = name.into();
+        let dimension: Vec<NdDimension> = dims
+            .into_iter()
+            .map(|(size, offset)| NdDimension {
+                size,
+                offset,
+                full_size: size,
+                binning: 1,
+                reverse: false,
+            })
+            .collect();
+        let uncompressed_size =
+            (data.len() * data.element_size_bytes().max(1)) as i64;
+        self.records.insert(
+            name.clone(),
+            RecordInstance {
+                name: name.clone(),
+                record_type: RecordType::NtNdArray,
+                common: DbCommonState::default(),
+                data: RecordData::NtNdArray {
+                    nt: NtNdArrayType {
+                        value: data,
+                        codec: NdCodec {
+                            name: String::new(),
+                            parameters: Default::default(),
+                        },
+                        compressed_size: uncompressed_size,
+                        uncompressed_size,
+                        dimension,
+                        unique_id: 0,
+                        data_time_stamp: NtTimeStamp {
+                            seconds_past_epoch: 0,
+                            nanoseconds: 0,
+                            user_tag: 0,
+                        },
+                        attribute: vec![],
+                        descriptor: None,
+                        alarm: None,
+                        time_stamp: None,
+                        display: None,
+                    },
+                    inp: None,
+                    out: None,
+                    omsl: OutputMode::Supervisory,
                 },
                 raw_fields: HashMap::new(),
             },
@@ -327,6 +507,27 @@ impl PvaServerBuilder {
         self
     }
 
+    // ─── External sources ────────────────────────────────────────────
+
+    /// Register an additional [`Source`] at the given priority.
+    ///
+    /// Lower `order` values are checked first during PV name resolution.
+    /// The built-in `SimplePvStore` (records added via `.ai()`, `.ao()`, etc.)
+    /// is always registered at order 0.
+    ///
+    /// ```rust,ignore
+    /// .source("hardware", -10, Arc::new(HardwareSource::new()))
+    /// ```
+    pub fn source(
+        mut self,
+        label: impl Into<String>,
+        order: i32,
+        source: Arc<dyn Source>,
+    ) -> Self {
+        self.extra_sources.push((label.into(), order, source));
+        self
+    }
+
     // ─── Configuration ───────────────────────────────────────────────
 
     /// Set the TCP port (default 5075).
@@ -414,6 +615,7 @@ impl PvaServerBuilder {
 
         PvaServer {
             store,
+            extra_sources: self.extra_sources,
             config,
             scans: self.scans,
         }
@@ -442,6 +644,7 @@ impl PvaServerBuilder {
 /// ```
 pub struct PvaServer {
     store: Arc<SimplePvStore>,
+    extra_sources: Vec<(String, i32, Arc<dyn Source>)>,
     config: PvaServerConfig,
     scans: Vec<(String, Duration, ScanCallback)>,
 }
@@ -457,6 +660,26 @@ impl PvaServer {
         &self.store
     }
 
+    /// Register an additional [`Source`] after building the server.
+    ///
+    /// This is useful when the source needs a reference to the store
+    /// (which is only available after `.build()`).
+    ///
+    /// ```rust,ignore
+    /// let server = PvaServer::builder().ai("X", 0.0).build();
+    /// let store = server.store().clone();
+    /// server.add_source("agg", 10, Arc::new(MyAggSource::new(store)));
+    /// server.run().await?;
+    /// ```
+    pub fn add_source(
+        &mut self,
+        label: impl Into<String>,
+        order: i32,
+        source: Arc<dyn Source>,
+    ) {
+        self.extra_sources.push((label.into(), order, source));
+    }
+
     /// Start the PVA server (UDP search + TCP handler + beacon + scan tasks).
     ///
     /// This blocks until the server is shut down or an error occurs.
@@ -465,6 +688,15 @@ impl PvaServer {
         // PVAccess monitor clients when values change.
         let registry = Arc::new(MonitorRegistry::new());
         self.store.set_registry(registry.clone()).await;
+
+        // Build the source registry with the built-in store at order 0.
+        let sources = Arc::new(SourceRegistry::new());
+        sources.add("builtin", 0, self.store.clone()).await;
+
+        // Register any extra sources provided via .source().
+        for (label, order, source) in &self.extra_sources {
+            sources.add(label.clone(), *order, source.clone()).await;
+        }
 
         // Spawn scan tasks.
         for (name, period, callback) in &self.scans {
@@ -488,7 +720,7 @@ impl PvaServer {
             pv_count, self.config.tcp_port
         );
 
-        run_pva_server_with_registry(self.store, self.config, registry).await
+        run_pva_server_with_registry(sources, self.config, registry).await
     }
 }
 

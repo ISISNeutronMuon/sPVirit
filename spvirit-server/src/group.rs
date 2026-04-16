@@ -277,9 +277,11 @@ fn parse_member(field_name: &str, raw: &RawMember, all_fields: &[&str]) -> Resul
 }
 
 // ---------------------------------------------------------------------------
-// GroupPvStore — PvStore wrapper that serves group PVs
+// GroupSource — Source implementation that serves group PVs
 // ---------------------------------------------------------------------------
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -287,23 +289,23 @@ use tokio::sync::mpsc;
 use spvirit_codec::spvd_decode::{DecodedValue, FieldDesc, FieldType, StructureDesc, TypeCode};
 use spvirit_types::{NtPayload, PvValue, ScalarArrayValue, ScalarValue};
 
-use crate::pvstore::PvStore;
+use crate::pvstore::{PvInfo, Source, SourceRegistry};
 use crate::simple_store::descriptor_for_payload;
 
-/// A [`PvStore`] wrapper that adds group-PV support on top of an inner store.
+/// A [`Source`] that serves group PVs composed from multiple member PVs.
 ///
-/// Group PV names are resolved by fetching each member PV from the inner store
-/// and composing them into an [`NtPayload::Generic`]. Non-group PV names are
-/// forwarded to the inner store unchanged.
-pub struct GroupPvStore<S: PvStore> {
-    inner: Arc<S>,
+/// Group PV names are resolved by fetching each member PV from the
+/// underlying [`SourceRegistry`] and composing them into an
+/// [`NtPayload::Generic`]. Non-group names are not claimed.
+pub struct GroupSource {
+    sources: Arc<SourceRegistry>,
     groups: HashMap<String, GroupPvDef>,
 }
 
-impl<S: PvStore> GroupPvStore<S> {
-    /// Create a new wrapper around `inner` with the given group definitions.
-    pub fn new(inner: Arc<S>, groups: HashMap<String, GroupPvDef>) -> Self {
-        Self { inner, groups }
+impl GroupSource {
+    /// Create a new group source backed by `sources` with the given group definitions.
+    pub fn new(sources: Arc<SourceRegistry>, groups: HashMap<String, GroupPvDef>) -> Self {
+        Self { sources, groups }
     }
 
     /// Build a composite snapshot for a group PV.
@@ -313,7 +315,7 @@ impl<S: PvStore> GroupPvStore<S> {
             if member.mapping == FieldMapping::Proc {
                 continue; // Proc members don't contribute a value field.
             }
-            let pv_val = match self.inner.get_snapshot(&member.channel).await {
+            let pv_val = match self.sources.get(&member.channel).await {
                 Some(snap) => payload_to_pv_value(&snap, member.mapping),
                 None => PvValue::Scalar(ScalarValue::I32(0)), // disconnected fallback
             };
@@ -335,7 +337,7 @@ impl<S: PvStore> GroupPvStore<S> {
             if member.mapping == FieldMapping::Proc {
                 continue;
             }
-            let field_type = match self.inner.get_snapshot(&member.channel).await {
+            let field_type = match self.sources.get(&member.channel).await {
                 Some(snap) => payload_field_type(&snap, member.mapping),
                 None => FieldType::Scalar(TypeCode::Int32), // disconnected fallback
             };
@@ -351,42 +353,46 @@ impl<S: PvStore> GroupPvStore<S> {
     }
 }
 
-impl<S: PvStore> PvStore for GroupPvStore<S> {
-    fn has_pv(&self, name: &str) -> impl Future<Output = bool> + Send {
-        async move {
-            if self.groups.contains_key(name) {
-                return true;
+impl Source for GroupSource {
+    fn claim(&self, name: &str) -> Pin<Box<dyn Future<Output = Option<PvInfo>> + Send + '_>> {
+        let name = name.to_string();
+        Box::pin(async move {
+            let def = self.groups.get(&name)?;
+            let descriptor = self.group_descriptor(def).await;
+            // A group PV is writable if any non-proc non-meta member is writable.
+            let mut writable = false;
+            for member in &def.members {
+                if member.mapping == FieldMapping::Proc || member.mapping == FieldMapping::Meta {
+                    continue;
+                }
+                if self.sources.is_writable(&member.channel).await {
+                    writable = true;
+                    break;
+                }
             }
-            self.inner.has_pv(name).await
-        }
+            Some(PvInfo {
+                descriptor,
+                writable,
+            })
+        })
     }
 
-    fn get_snapshot(&self, name: &str) -> impl Future<Output = Option<NtPayload>> + Send {
-        async move {
-            if let Some(def) = self.groups.get(name) {
-                return Some(self.group_snapshot(def).await);
-            }
-            self.inner.get_snapshot(name).await
-        }
+    fn get(&self, name: &str) -> Pin<Box<dyn Future<Output = Option<NtPayload>> + Send + '_>> {
+        let name = name.to_string();
+        Box::pin(async move {
+            let def = self.groups.get(&name)?;
+            Some(self.group_snapshot(def).await)
+        })
     }
 
-    fn get_descriptor(&self, name: &str) -> impl Future<Output = Option<StructureDesc>> + Send {
-        async move {
-            if let Some(def) = self.groups.get(name) {
-                return Some(self.group_descriptor(def).await);
-            }
-            self.inner.get_descriptor(name).await
-        }
-    }
-
-    fn put_value(
+    fn put(
         &self,
         name: &str,
         value: &DecodedValue,
-    ) -> impl Future<Output = std::result::Result<Vec<(String, NtPayload)>, String>> + Send {
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<Vec<(String, NtPayload)>, String>> + Send + '_>> {
         let name = name.to_string();
         let value = value.clone();
-        async move {
+        Box::pin(async move {
             if let Some(def) = self.groups.get(&name) {
                 // Dispatch sub-field puts to member channels.
                 let fields = match &value {
@@ -407,7 +413,7 @@ impl<S: PvStore> PvStore for GroupPvStore<S> {
                     // Find the sub-field matching this member.
                     if let Some((_, sub_val)) = fields.iter().find(|(n, _)| n == &member.field_name)
                     {
-                        match self.inner.put_value(&member.channel, sub_val).await {
+                        match self.sources.put(&member.channel, sub_val).await {
                             Ok(mut r) => results.append(&mut r),
                             Err(e) => {
                                 tracing::warn!(
@@ -421,68 +427,41 @@ impl<S: PvStore> PvStore for GroupPvStore<S> {
                 }
                 Ok(results)
             } else {
-                self.inner.put_value(&name, &value).await
+                Err(format!("group PV '{}' not found", name))
             }
-        }
-    }
-
-    fn is_writable(&self, name: &str) -> impl Future<Output = bool> + Send {
-        async move {
-            if let Some(def) = self.groups.get(name) {
-                // A group PV is writable if any non-proc non-meta member is writable.
-                for member in &def.members {
-                    if member.mapping == FieldMapping::Proc || member.mapping == FieldMapping::Meta
-                    {
-                        continue;
-                    }
-                    if self.inner.is_writable(&member.channel).await {
-                        return true;
-                    }
-                }
-                return false;
-            }
-            self.inner.is_writable(name).await
-        }
-    }
-
-    fn list_pvs(&self) -> impl Future<Output = Vec<String>> + Send {
-        async move {
-            let mut pvs = self.inner.list_pvs().await;
-            pvs.extend(self.groups.keys().cloned());
-            pvs.sort();
-            pvs.dedup();
-            pvs
-        }
+        })
     }
 
     fn subscribe(
         &self,
         name: &str,
-    ) -> impl Future<Output = Option<mpsc::Receiver<NtPayload>>> + Send {
+    ) -> Pin<Box<dyn Future<Output = Option<mpsc::Receiver<NtPayload>>> + Send + '_>> {
         let name = name.to_string();
-        async move {
-            if let Some(def) = self.groups.get(&name) {
-                return self.subscribe_group(def).await;
-            }
-            self.inner.subscribe(&name).await
-        }
+        Box::pin(async move {
+            let def = self.groups.get(&name)?;
+            self.subscribe_group(def).await
+        })
+    }
+
+    fn names(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send + '_>> {
+        Box::pin(async move { self.groups.keys().cloned().collect() })
     }
 }
 
-impl<S: PvStore> GroupPvStore<S> {
+impl GroupSource {
     /// Subscribe to a group PV by fanning-in member subscriptions.
     ///
     /// When any member PV updates, the trigger rules are evaluated and if
     /// triggered, a full group snapshot is composed and sent to the subscriber.
     async fn subscribe_group(&self, def: &GroupPvDef) -> Option<mpsc::Receiver<NtPayload>> {
         let (tx, rx) = mpsc::channel(64);
-        let inner = self.inner.clone();
+        let sources = self.sources.clone();
         let def = def.clone();
 
         // Collect member subscriptions.
         let mut member_rxs: Vec<(String, mpsc::Receiver<NtPayload>)> = Vec::new();
         for member in &def.members {
-            if let Some(member_rx) = inner.subscribe(&member.channel).await {
+            if let Some(member_rx) = sources.subscribe(&member.channel).await {
                 member_rxs.push((member.field_name.clone(), member_rx));
             }
         }
@@ -518,7 +497,7 @@ impl<S: PvStore> GroupPvStore<S> {
                             if member.mapping == FieldMapping::Proc {
                                 continue;
                             }
-                            let pv_val = match inner.get_snapshot(&member.channel).await {
+                            let pv_val = match sources.get(&member.channel).await {
                                 Some(snap) => payload_to_pv_value(&snap, member.mapping),
                                 None => PvValue::Scalar(ScalarValue::I32(0)),
                             };

@@ -1,6 +1,6 @@
-/// # Custom PvStore Backend Example
+/// # Custom Source Backend Example
 ///
-/// This example demonstrates how to implement a custom [`PvStore`] backend
+/// This example demonstrates how to implement a custom [`Source`] backend
 /// to integrate spvirit-server with any data source.
 ///
 /// The example implements a simulated sensor backend that:
@@ -15,12 +15,14 @@
 /// - Integrate with REST APIs
 /// - Proxy to other control systems
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use spvirit_codec::spvd_decode::{DecodedValue, StructureDesc};
+use spvirit_codec::spvd_decode::{DecodedValue, FieldDesc, FieldType, StructureDesc, TypeCode};
 use spvirit_server::monitor::MonitorRegistry;
-use spvirit_server::pvstore::PvStore;
+use spvirit_server::pvstore::{PvInfo, Source, SourceRegistry};
 use spvirit_types::{NtPayload, NtScalar, ScalarValue};
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
@@ -175,72 +177,59 @@ impl SensorBackend {
     }
 }
 
-impl PvStore for SensorBackend {
-    fn has_pv(&self, name: &str) -> impl std::future::Future<Output = bool> + Send {
+impl Source for SensorBackend {
+    fn claim(&self, name: &str) -> Pin<Box<dyn Future<Output = Option<PvInfo>> + Send + '_>> {
         let sensors = self.sensors.clone();
         let name = name.to_string();
-        async move {
-            let found = sensors.read().await.contains_key(&name);
-            println!("[has_pv] '{}' -> {}", name, found);
-            found
-        }
+        Box::pin(async move {
+            let sensors = sensors.read().await;
+            let sensor = sensors.get(&name)?;
+            println!("[claim] '{}' -> Some", name);
+            Some(PvInfo {
+                descriptor: StructureDesc {
+                    struct_id: Some("epics:nt/NTScalar:1.0".to_string()),
+                    fields: vec![FieldDesc {
+                        name: "value".to_string(),
+                        field_type: FieldType::Scalar(TypeCode::Float64),
+                    }],
+                },
+                writable: sensor.writable,
+            })
+        })
     }
 
-    fn get_snapshot(
-        &self,
-        name: &str,
-    ) -> impl std::future::Future<Output = Option<NtPayload>> + Send {
+    fn get(&self, name: &str) -> Pin<Box<dyn Future<Output = Option<NtPayload>> + Send + '_>> {
         let sensors = self.sensors.clone();
         let name = name.to_string();
-        async move {
+        Box::pin(async move {
             let result = sensors.read().await.get(&name).map(|s| s.to_payload());
             println!(
-                "[get_snapshot] '{}' -> {}",
+                "[get] '{}' -> {}",
                 name,
                 if result.is_some() { "Some" } else { "None" }
             );
             result
-        }
+        })
     }
 
-    fn get_descriptor(
-        &self,
-        name: &str,
-    ) -> impl std::future::Future<Output = Option<StructureDesc>> + Send {
-        let sensors = self.sensors.clone();
-        let name = name.to_string();
-        async move {
-            if sensors.read().await.contains_key(&name) {
-                println!("[get_descriptor] '{}' -> Some(NTScalar)", name);
-                Some(StructureDesc {
-                    struct_id: Some("epics:nt/NTScalar:1.0".to_string()),
-                    fields: vec![],
-                })
-            } else {
-                println!("[get_descriptor] '{}' -> None", name);
-                None
-            }
-        }
-    }
-
-    fn put_value(
+    fn put(
         &self,
         name: &str,
         value: &DecodedValue,
-    ) -> impl std::future::Future<Output = Result<Vec<(String, NtPayload)>, String>> + Send {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, NtPayload)>, String>> + Send + '_>> {
         let sensors = self.sensors.clone();
         let name = name.to_string();
         let value = value.clone();
-        async move {
-            println!("[put_value] '{}' called with {:?}", name, value);
+        Box::pin(async move {
+            println!("[put] '{}' called with {:?}", name, value);
             let mut sensors = sensors.write().await;
             let sensor = sensors.get_mut(&name).ok_or_else(|| {
-                println!("[put_value] '{}' -> ERROR: PV not found", name);
+                println!("[put] '{}' -> ERROR: PV not found", name);
                 format!("PV '{}' not found", name)
             })?;
 
             if !sensor.writable {
-                println!("[put_value] '{}' -> ERROR: not writable", name);
+                println!("[put] '{}' -> ERROR: not writable", name);
                 return Err(format!("PV '{}' is not writable", name));
             }
 
@@ -260,55 +249,36 @@ impl PvStore for SensorBackend {
                     })
                     .ok_or_else(|| {
                         println!(
-                            "[put_value] '{}' -> ERROR: no numeric 'value' field in structure",
+                            "[put] '{}' -> ERROR: no numeric 'value' field in structure",
                             name
                         );
                         "Invalid value format".to_string()
                     })?,
                 other => {
                     println!(
-                        "[put_value] '{}' -> ERROR: unsupported DecodedValue variant: {:?}",
+                        "[put] '{}' -> ERROR: unsupported DecodedValue variant: {:?}",
                         name, other
                     );
                     return Err("Unsupported value type".to_string());
                 }
             };
 
-            println!("[put_value] '{}' = {} -> OK", name, new_value);
+            println!("[put] '{}' = {} -> OK", name, new_value);
             sensor.value = new_value;
             let payload = sensor.to_payload();
 
             Ok(vec![(name.clone(), payload)])
-        }
-    }
-
-    fn is_writable(&self, name: &str) -> impl std::future::Future<Output = bool> + Send {
-        let sensors = self.sensors.clone();
-        let name = name.to_string();
-        async move {
-            let result = sensors.read().await.get(&name).is_some_and(|s| s.writable);
-            println!("[is_writable] '{}' -> {}", name, result);
-            result
-        }
-    }
-
-    fn list_pvs(&self) -> impl std::future::Future<Output = Vec<String>> + Send {
-        let sensors = self.sensors.clone();
-        async move {
-            let names: Vec<String> = sensors.read().await.keys().cloned().collect();
-            println!("[list_pvs] -> {} PVs", names.len());
-            names
-        }
+        })
     }
 
     fn subscribe(
         &self,
         name: &str,
-    ) -> impl std::future::Future<Output = Option<mpsc::Receiver<NtPayload>>> + Send {
+    ) -> Pin<Box<dyn Future<Output = Option<mpsc::Receiver<NtPayload>>> + Send + '_>> {
         let sensors = self.sensors.clone();
         let subscribers = self.subscribers.clone();
         let name = name.to_string();
-        async move {
+        Box::pin(async move {
             if !sensors.read().await.contains_key(&name) {
                 println!("[subscribe] '{}' -> None (PV not found)", name);
                 return None;
@@ -324,7 +294,16 @@ impl PvStore for SensorBackend {
 
             println!("[subscribe] '{}' -> subscribed", name);
             Some(rx)
-        }
+        })
+    }
+
+    fn names(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send + '_>> {
+        let sensors = self.sensors.clone();
+        Box::pin(async move {
+            let names: Vec<String> = sensors.read().await.keys().cloned().collect();
+            println!("[names] -> {} PVs", names.len());
+            names
+        })
     }
 }
 
@@ -343,19 +322,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Print available PVs with their writability status
-    println!("Custom PvStore backend server starting");
+    println!("Custom Source backend server starting");
     println!("Available PVs:");
-    for pv in backend.list_pvs().await {
-        let writable = backend.is_writable(&pv).await;
+    for pv in backend.names().await {
+        let writable = backend
+            .claim(&pv)
+            .await
+            .map(|info| info.writable)
+            .unwrap_or(false);
         println!("  - {} (writable: {})", pv, writable);
     }
     println!();
     println!("Try: spvirit-monitor SENSOR:TEMP SENSOR:PRESSURE SENSOR:HUMIDITY");
     println!("Try: spvirit-put CONTROL:TEMP_SETPOINT 25.0 (should be writable)");
 
+    // Build a SourceRegistry and register the custom backend
+    let sources = Arc::new(SourceRegistry::new());
+    sources.add("sensors", 0, backend).await;
+
     // Create the default server config
     let config = spvirit_server::PvaServerConfig::default();
 
-    // Run the PVA server with the custom backend
-    spvirit_server::run_pva_server_with_registry(backend, config, registry).await
+    // Run the PVA server with the source registry
+    spvirit_server::run_pva_server_with_registry(sources, config, registry).await
 }

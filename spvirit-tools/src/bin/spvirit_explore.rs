@@ -1386,11 +1386,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let poll_interval_secs = poll_interval_secs.max(1);
 
-    let targets = if base_opts.no_broadcast {
-        Vec::new()
-    } else {
-        build_search_targets(base_opts.search_addr, base_opts.bind_addr)
-    };
+    let targets = build_search_targets(base_opts.search_addr, base_opts.bind_addr);
     let worker_cfg = WorkerConfig {
         opts: base_opts.clone(),
         search_targets: targets,

@@ -1,10 +1,10 @@
 //! Python wrappers for Normative Type structs.
 
 use pyo3::prelude::*;
-use pyo3::types::PyList;
+use pyo3::types::{PyDict, PyList};
 use spvirit_types::{
     NtAlarm, NtControl, NtDisplay, NtNdArray, NtPayload, NtScalar, NtScalarArray, NtTable,
-    NtTimeStamp,
+    NtTimeStamp, PvValue,
 };
 
 use crate::convert::{py_to_scalar, py_to_scalar_array, scalar_array_to_py, scalar_to_py};
@@ -487,5 +487,35 @@ pub fn nt_payload_to_py(py: Python<'_>, payload: NtPayload) -> PyObject {
         NtPayload::ScalarArray(a) => PyNtScalarArray::new(a).into_pyobject(py).expect("NtScalarArray").into_any().unbind(),
         NtPayload::Table(t) => PyNtTable::new(t).into_pyobject(py).expect("NtTable").into_any().unbind(),
         NtPayload::NdArray(n) => PyNtNdArray::new(n).into_pyobject(py).expect("NtNdArray").into_any().unbind(),
+        NtPayload::Enum(e) => {
+            let d = PyDict::new(py);
+            d.set_item("index", e.index).ok();
+            d.set_item("choices", &e.choices).ok();
+            d.set_item("selected", e.selected().unwrap_or("")).ok();
+            d.unbind().into_any()
+        }
+        NtPayload::Generic { struct_id, fields } => {
+            let d = PyDict::new(py);
+            d.set_item("struct_id", &struct_id).ok();
+            for (name, val) in &fields {
+                d.set_item(name, pvvalue_to_py(py, val)).ok();
+            }
+            d.unbind().into_any()
+        }
+    }
+}
+
+fn pvvalue_to_py(py: Python<'_>, val: &PvValue) -> PyObject {
+    match val {
+        PvValue::Scalar(s) => scalar_to_py(py, s),
+        PvValue::ScalarArray(a) => scalar_array_to_py(py, a),
+        PvValue::Structure { struct_id, fields } => {
+            let d = PyDict::new(py);
+            d.set_item("struct_id", struct_id).ok();
+            for (name, v) in fields {
+                d.set_item(name, pvvalue_to_py(py, v)).ok();
+            }
+            d.unbind().into_any()
+        }
     }
 }
