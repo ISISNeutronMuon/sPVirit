@@ -1,4 +1,4 @@
-use spvirit_server::{PvStore, PvaServer};
+use spvirit_server::PvaServer;
 use spvirit_types::{NtPayload, PvValue, ScalarArrayValue, ScalarValue};
 
 #[tokio::main]
@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await;
 
             for pv in &["SIM:TEMPERATURE", "SIM:SPECTRUM", "SIM:STATE", "SIM:META"] {
-                if let Some(snapshot) = store.get_snapshot(pv).await {
+                if let Some(snapshot) = store.get_nt(pv).await {
                     print_snapshot(pv, &snapshot);
                 }
             }

@@ -9,23 +9,24 @@
 
 */ˈspɪrɪt/ of the Machine* 
 
-Spvirit is a Rust library for working with EPICS PVAccess protocol, including encoding/decoding and connection state tracking. It also includes tools for monitoring and testing PVAccess connections. These are not yet production ready , but they are available for anyone to use and contribute to.
+Spvirit is a Rust library for working with EPICS PVAccess protocol, including encoding/decoding and connection state tracking. It also includes tools for monitoring and testing PVAccess connections. These are not yet production ready, but they are available for anyone to use and contribute to.
 
 Key areas of development in the near future include:
-- More complete support for EPICS Normative Types (NT) and their associated metadata.
 - Expanding `spvirit-server` with more complete softIOC behaviours and record processing.
+- TLS support and structured put payloads in the client.
 
 ## Why Rust? 
 
 Because why not, admittedly I just wanted to learn Rust and this seemed like a fun project with a moderately useful outcome.
 
 ## Project Structure
-The project is structured as a Cargo workspace with five crates:
+The project is structured as a Cargo workspace with six crates:
 - `spvirit-types`: Shared data model types for PVAccess Normative Types (NT).
 - `spvirit-codec`: PVAccess protocol encoding/decoding logic and connection state tracking.
 - `spvirit-client`: Client library — search, connect, get, put, monitor.
-- `spvirit-server`: Server library — db parsing, PV store trait, PVAccess server runtime.
+- `spvirit-server`: Server library — db parsing, Source trait, PVAccess server runtime.
 - `spvirit-tools`: Command-line tools (CLI binaries) for monitoring and testing PVAccess connections.
+- `spvirit-py`: Python bindings via PyO3 — client and server APIs accessible from Python.
 
 ## Key Concepts
 
@@ -78,6 +79,14 @@ flowchart LR
 | `stringin` | `.string_in(name, str)` | Input (read-only) | String | Status messages |
 | `stringout` | `.string_out(name, str)` | Output (writable) | String | Text commands |
 | `waveform` | `.waveform(name, data)` | Writable | Array | Spectra, traces |
+| `aai` | `.aai(name, data)` | Input (read-only) | Array | Read-only array data |
+| `aao` | `.aao(name, data)` | Output (writable) | Array | Writable array data |
+| `subArray` | `.sub_array(name, data)` | Writable | Array | View into part of an array |
+| `mbbi` | `.mbbi(name, choices, idx)` | Input (read-only) | Enum | Multi-choice status |
+| `mbbo` | `.mbbo(name, choices, idx)` | Output (writable) | Enum | Multi-choice selector |
+| `NtTable` | `.nt_table(name, table)` | Writable | Table | Tabular data |
+| `NtNdArray` | `.nt_ndarray(name, arr)` | Writable | NDArray | Image / detector data |
+| `generic` | `.generic(name, desc, payload)` | Writable | Arbitrary | Custom structure |
 
 **Input** records are read-only from the client's perspective — values are produced by the server (scan callbacks, hardware, simulation). **Output** records accept writes from PVAccess clients (PUT operations).
 
@@ -92,6 +101,7 @@ flowchart TD
     NTP --> NTSA["NtScalarArray"]
     NTP --> NTT["NtTable"]
     NTP --> NTNA["NtNdArray"]
+    NTP --> NTE["NtEnum"]
 
     NTS --> V1["value: ScalarValue"]
     NTS --> A1["alarm severity/status/message"]
@@ -105,14 +115,17 @@ flowchart TD
 
     NTT --> L["labels + columns"]
     NTNA --> DIM["dimensions + codec + attributes"]
+    NTE --> V3["index: u32 + choices: Vec&lt;String&gt;"]
+    NTE --> A3["alarm"]
 ```
 
-The four Normative Types in Spvirit:
+The five Normative Types in Spvirit:
 
 | Normative Type | Rust Type | Backed by | Used for |
 |---|---|---|---|
 | NTScalar | `NtScalar` | `ScalarValue` (f64, i32, bool, String, …) | Single-value PVs (`ai`, `ao`, `bi`, `bo`, etc.) |
 | NTScalarArray | `NtScalarArray` | `ScalarArrayValue` (Vec\<f64\>, Vec\<i32\>, …) | Array PVs (`waveform`, `aai`, `aao`) |
+| NTEnum | `NtEnum` | index (u32) + choices (Vec\<String\>) | Multi-bit binary records (`mbbi`, `mbbo`) |
 | NTTable | `NtTable` | Named columns of `ScalarArrayValue` | Tabular data |
 | NTNDArray | `NtNdArray` | `ScalarArrayValue` + dimensions + attributes | Image / detector data (areaDetector) |
 
@@ -138,7 +151,7 @@ flowchart TD
         Builder["PvaServer::builder()
         .ai() .ao() .bo() ..."] --> Records
         Records --> Store["SimplePvStore
-        (implements PvStore trait)"]
+        (implements Source trait)"]
         Store --> Runtime["PvaServer::run()
         UDP search + TCP handler + beacons"]
         Scan["scan callbacks"] -->|periodic timer| Store
@@ -196,7 +209,7 @@ Add the crates you need to your `Cargo.toml`:
 ```toml
 [dependencies]
 spvirit-client = "0.1"   # client library: search, connect, get, put, monitor
-spvirit-server = "0.1"   # server library: db parsing, PvStore trait, PVA server
+spvirit-server = "0.1"   # server library: db parsing, Source trait, PVA server
 spvirit-codec  = "0.1"   # low-level PVA protocol encode/decode
 spvirit-types  = "0.1"   # shared Normative Type data model
 spvirit-tools  = "0.1"   # all of the above + CLI tool helpers
@@ -541,10 +554,15 @@ cargo run -p spvirit-server --example scan_callback     # periodic scan
 cargo run -p spvirit-server --example waveform          # array PV
 cargo run -p spvirit-server --example linked_calc       # linked/calculated records
 cargo run -p spvirit-server --example custom_record     # hand-built RecordInstance
+cargo run -p spvirit-server --example snake             # snake game with NTNDArray display
+cargo run -p spvirit-server --example custom_pvstore    # custom Source with low-level SourceRegistry
 
-# Tools crate examples
-cargo run -p spvirit-tools --example pvget_example      # minimal use of tool-style pvget helper
-cargo run -p spvirit-tools --example search_example     # minimal PV search helper
+# Source-based provider examples
+cargo run -p spvirit-server --example multi_source       # multiple Source providers by priority
+cargo run -p spvirit-server --example wildcard_source    # dynamic PV creation (SCRATCH:* prefix)
+cargo run -p spvirit-server --example json_source        # file-backed persistent PV store
+cargo run -p spvirit-server --example aggregate_source   # computed aggregation from raw PVs
+cargo run -p spvirit-server --example passthrough_source # middleware/decorator with access control
 ```
 
 **Quick demo — server + client in two terminals:**
@@ -569,14 +587,17 @@ cargo run -p spvirit-client --example pvget -- SIM:TEMPERATURE
 | `spexplore` |  | Interactive TUI to browse servers, select PVs, and monitor values |
 | `spsearch` |  | TUI showing PV search network traffic for diagnostics |
 | `spsine` |  | Continuously write a sine wave to a PV (demo/testing) |
+| `spget_compare` |  | Compare `pvget` results between spvirit and EPICS Base |
 | `spdodeca` |  | Server publishing a rotating 3D dodecahedron as an NTNDArray PV |
 
 ## Server (softIOC-like experiment)
 
 The `spvirit-server` crate provides a reusable PVAccess server runtime at two levels:
 
-- **High-level**: Use `PvaServer::builder()` to declare typed records (`ai`, `ao`, `bi`, `bo`, `string_in`, `string_out`, `waveform`), register `on_put` callbacks, attach periodic `scan` callbacks, load `.db` files, and call `.run()`. See the "Running a PVAccess server" example above.
-- **Low-level**: Implement the [`PvStore`] trait to supply your own PV data source, then call `run_pva_server` to serve PVs over PVAccess. The bundled `spserver` CLI tool demonstrates this by parsing a limited subset of EPICS `.db` file syntax to serve static PVs.
+- **High-level**: Use `PvaServer::builder()` to declare typed records (`ai`, `ao`, `bi`, `bo`, `string_in`, `string_out`, `waveform`, `aai`, `aao`, `mbbi`, `mbbo`, `nt_table`, `nt_ndarray`, `generic`, …), register `on_put` callbacks, attach periodic `scan` callbacks, load `.db` files, register custom `Source` providers, and call `.run()`. See the "Running a PVAccess server" example above.
+- **Low-level**: Implement the [`Source`] trait to supply your own PV data source. A `Source` decides which PV names it handles (`claim`), serves GET/PUT operations, and provides subscription channels. Multiple sources are composed in a priority-ordered `SourceRegistry` — the first source to claim a name wins. Call `run_pva_server_with_registry` to serve PVs over PVAccess. The bundled `spserver` CLI tool demonstrates this by parsing a limited subset of EPICS `.db` file syntax to serve static PVs.
+
+The `Source` trait replaces the earlier `PvStore` trait, enabling dynamic PV creation, computed values, file-backed persistence, middleware/decorator patterns, and multi-provider composition. See the `multi_source`, `wildcard_source`, `json_source`, `aggregate_source`, and `passthrough_source` examples.
 
 Both levels prove that the encoding/decoding and connection handling logic in `spvirit-codec` is sufficient to implement a server, and they can be used as a starting point for a more full-featured softIOC in the future. (hint hint PRs welcome :))
 

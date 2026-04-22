@@ -758,16 +758,19 @@ pub async fn resolve_pv_server(opts: &PvGetOptions) -> Result<SocketAddr, PvGetE
 
     let no_broadcast = opts.no_broadcast;
 
+    // Launch all search strategies concurrently — TCP name servers + UDP broadcast.
+    // Return the first successful result.
+    let targets = build_search_targets(opts.search_addr, opts.bind_addr);
+
     // Fail fast when no search strategy is available.
-    if no_broadcast && name_servers.is_empty() {
+    // Even with --no-broadcast, explicit EPICS_PVA_ADDR_LIST entries are
+    // valid unicast targets, so only fail when truly nothing is available.
+    let has_explicit_targets = !targets.is_empty();
+    if no_broadcast && !has_explicit_targets && name_servers.is_empty() {
         return Err(PvGetError::Search(
             "no search strategy: specify --name-server or --server when using --no-broadcast",
         ));
     }
-
-    // Launch all search strategies concurrently — TCP name servers + UDP broadcast.
-    // Return the first successful result.
-    let targets = build_search_targets(opts.search_addr, opts.bind_addr);
 
     let pv = opts.pv_name.clone();
     let timeout_dur = opts.timeout;
@@ -784,7 +787,7 @@ pub async fn resolve_pv_server(opts: &PvGetOptions) -> Result<SocketAddr, PvGetE
         });
     }
 
-    if !no_broadcast {
+    if !no_broadcast || has_explicit_targets {
         let pv = pv.clone();
         let targets = targets.clone();
         set.spawn(async move {

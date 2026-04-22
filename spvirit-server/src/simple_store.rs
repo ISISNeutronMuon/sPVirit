@@ -1,4 +1,4 @@
-//! A simple in-memory [`PvStore`] implementation backed by `RecordInstance`.
+//! A simple in-memory [`Source`] implementation backed by `RecordInstance`.
 //!
 //! Used by [`PvaServer`](crate::pva_server::PvaServer) to serve PVs without
 //! requiring an external database.
@@ -9,6 +9,9 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 use tracing::debug;
 
+use std::future::Future;
+use std::pin::Pin;
+
 use spvirit_codec::spvd_decode::{DecodedValue, FieldDesc, FieldType, StructureDesc, TypeCode};
 use spvirit_types::{NtPayload, ScalarArrayValue, ScalarValue};
 
@@ -17,7 +20,7 @@ use crate::apply::{
     apply_value_update,
 };
 use crate::monitor::MonitorRegistry;
-use crate::pvstore::PvStore;
+use crate::pvstore::{PvInfo, Source};
 use crate::types::{RecordData, RecordInstance};
 
 /// Callback invoked after a PUT value is applied to a record.
@@ -282,37 +285,36 @@ impl SimplePvStore {
     }
 }
 
-impl PvStore for SimplePvStore {
-    fn has_pv(&self, name: &str) -> impl Future<Output = bool> + Send {
-        async move {
+impl Source for SimplePvStore {
+    fn claim(&self, name: &str) -> Pin<Box<dyn Future<Output = Option<PvInfo>> + Send + '_>> {
+        let name = name.to_string();
+        Box::pin(async move {
             let pvs = self.pvs.read().await;
-            pvs.contains_key(name)
-        }
+            let entry = pvs.get(&name)?;
+            let descriptor = descriptor_for_payload(&entry.record.to_ntpayload());
+            Some(PvInfo {
+                descriptor,
+                writable: entry.record.writable(),
+            })
+        })
     }
 
-    fn get_snapshot(&self, name: &str) -> impl Future<Output = Option<NtPayload>> + Send {
-        async move {
+    fn get(&self, name: &str) -> Pin<Box<dyn Future<Output = Option<NtPayload>> + Send + '_>> {
+        let name = name.to_string();
+        Box::pin(async move {
             let pvs = self.pvs.read().await;
-            pvs.get(name).map(|e| e.record.to_ntpayload())
-        }
+            pvs.get(&name).map(|e| e.record.to_ntpayload())
+        })
     }
 
-    fn get_descriptor(&self, name: &str) -> impl Future<Output = Option<StructureDesc>> + Send {
-        async move {
-            let pvs = self.pvs.read().await;
-            pvs.get(name)
-                .map(|e| descriptor_for_payload(&e.record.to_ntpayload()))
-        }
-    }
-
-    fn put_value(
+    fn put(
         &self,
         name: &str,
         value: &DecodedValue,
-    ) -> impl Future<Output = Result<Vec<(String, NtPayload)>, String>> + Send {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(String, NtPayload)>, String>> + Send + '_>> {
         let name = name.to_string();
         let value = value.clone();
-        async move {
+        Box::pin(async move {
             let result = {
                 let mut pvs = self.pvs.write().await;
                 let entry = pvs
@@ -348,35 +350,28 @@ impl PvStore for SimplePvStore {
             self.evaluate_links(&name).await;
 
             Ok(vec![result])
-        }
-    }
-
-    fn is_writable(&self, name: &str) -> impl Future<Output = bool> + Send {
-        async move {
-            let pvs = self.pvs.read().await;
-            pvs.get(name).is_some_and(|e| e.record.writable())
-        }
-    }
-
-    fn list_pvs(&self) -> impl Future<Output = Vec<String>> + Send {
-        async move {
-            let pvs = self.pvs.read().await;
-            pvs.keys().cloned().collect()
-        }
+        })
     }
 
     fn subscribe(
         &self,
         name: &str,
-    ) -> impl Future<Output = Option<mpsc::Receiver<NtPayload>>> + Send {
+    ) -> Pin<Box<dyn Future<Output = Option<mpsc::Receiver<NtPayload>>> + Send + '_>> {
         let name = name.to_string();
-        async move {
+        Box::pin(async move {
             let mut pvs = self.pvs.write().await;
             let entry = pvs.get_mut(&name)?;
             let (tx, rx) = mpsc::channel(64);
             entry.subscribers.push(tx);
             Some(rx)
-        }
+        })
+    }
+
+    fn names(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send + '_>> {
+        Box::pin(async move {
+            let pvs = self.pvs.read().await;
+            pvs.keys().cloned().collect()
+        })
     }
 }
 
@@ -468,7 +463,7 @@ fn apply_put_to_record(
 
 // ── NtPayload → StructureDesc ────────────────────────────────────────────
 
-pub(crate) fn descriptor_for_payload(payload: &NtPayload) -> StructureDesc {
+pub fn descriptor_for_payload(payload: &NtPayload) -> StructureDesc {
     match payload {
         NtPayload::Scalar(nt) => nt_scalar_desc(&nt.value),
         NtPayload::ScalarArray(arr) => nt_scalar_array_desc(&arr.value),
@@ -859,8 +854,8 @@ mod tests {
         let mut records = HashMap::new();
         records.insert("TEST:AI".into(), make_ai("TEST:AI", 1.0));
         let store = SimplePvStore::new(records, HashMap::new(), vec![], false);
-        assert!(store.has_pv("TEST:AI").await);
-        assert!(!store.has_pv("MISSING").await);
+        assert!(store.claim("TEST:AI").await.is_some());
+        assert!(store.claim("MISSING").await.is_none());
     }
 
     #[tokio::test]
@@ -868,7 +863,7 @@ mod tests {
         let mut records = HashMap::new();
         records.insert("TEST:AI".into(), make_ai("TEST:AI", 42.0));
         let store = SimplePvStore::new(records, HashMap::new(), vec![], false);
-        let snap = store.get_snapshot("TEST:AI").await.unwrap();
+        let snap = store.get("TEST:AI").await.unwrap();
         match snap {
             NtPayload::Scalar(nt) => assert_eq!(nt.value, ScalarValue::F64(42.0)),
             _ => panic!("expected scalar"),
@@ -882,11 +877,11 @@ mod tests {
         let store = SimplePvStore::new(records, HashMap::new(), vec![], false);
 
         let val = DecodedValue::Structure(vec![("value".to_string(), DecodedValue::Float64(99.5))]);
-        let result = store.put_value("TEST:AO", &val).await.unwrap();
+        let result = store.put("TEST:AO", &val).await.unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, "TEST:AO");
 
-        let snap = store.get_snapshot("TEST:AO").await.unwrap();
+        let snap = store.get("TEST:AO").await.unwrap();
         match snap {
             NtPayload::Scalar(nt) => assert_eq!(nt.value, ScalarValue::F64(99.5)),
             _ => panic!("expected scalar"),
@@ -900,7 +895,7 @@ mod tests {
         let store = SimplePvStore::new(records, HashMap::new(), vec![], false);
 
         let val = DecodedValue::Float64(5.0);
-        let err = store.put_value("TEST:AI", &val).await.unwrap_err();
+        let err = store.put("TEST:AI", &val).await.unwrap_err();
         assert!(err.contains("not writable"));
     }
 
@@ -957,7 +952,7 @@ mod tests {
             };
 
             assert!(store.set_array_value(&pv, second.clone()).await);
-            let snap = store.get_snapshot(&pv).await.unwrap();
+            let snap = store.get(&pv).await.unwrap();
             match snap {
                 NtPayload::ScalarArray(nt) => assert_eq!(nt.value, second),
                 _ => panic!("expected scalar array"),
@@ -1086,8 +1081,9 @@ mod tests {
         let mut records = HashMap::new();
         records.insert("TEST:AI".into(), make_ai("TEST:AI", 0.0));
         let store = SimplePvStore::new(records, HashMap::new(), vec![], false);
-        let desc = store.get_descriptor("TEST:AI").await.unwrap();
-        assert_eq!(desc.struct_id.as_deref(), Some("epics:nt/NTScalar:1.0"));
+        let info = store.claim("TEST:AI").await.unwrap();
+        assert_eq!(info.descriptor.struct_id.as_deref(), Some("epics:nt/NTScalar:1.0"));
+        let desc = info.descriptor;
         let value_field = desc.field("value").unwrap();
         assert!(matches!(
             value_field.field_type,
@@ -1101,10 +1097,10 @@ mod tests {
         records.insert("TEST:AO".into(), make_ao("TEST:AO", 0.0));
         let store = SimplePvStore::new(records, HashMap::new(), vec![], false);
 
-        let mut rx = store.subscribe("TEST:AO").await.unwrap();
+        let mut rx = Source::subscribe(&store, "TEST:AO").await.unwrap();
 
         let val = DecodedValue::Structure(vec![("value".to_string(), DecodedValue::Float64(7.7))]);
-        store.put_value("TEST:AO", &val).await.unwrap();
+        store.put("TEST:AO", &val).await.unwrap();
 
         let update = rx.recv().await.unwrap();
         match update {
@@ -1131,7 +1127,7 @@ mod tests {
 
         let store = SimplePvStore::new(records, on_put, vec![], false);
         let val = DecodedValue::Structure(vec![("value".to_string(), DecodedValue::Float64(1.0))]);
-        store.put_value("CB:AO", &val).await.unwrap();
+        store.put("CB:AO", &val).await.unwrap();
 
         // Give the spawned task time to run.
         tokio::task::yield_now().await;
