@@ -3,7 +3,8 @@
 use std::net::{SocketAddr, TcpListener, TcpStream as StdTcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Locate a workspace binary by name.  Test binaries live in
 /// `target/<profile>/deps/`, so we go up two levels to reach
@@ -46,7 +47,18 @@ fn free_udp_port() -> Option<u16> {
 }
 
 pub fn write_test_db_file() -> std::io::Result<PathBuf> {
-    let path = std::env::temp_dir().join(format!("pva_protocol_{}.db", std::process::id()));
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!(
+        "pva_protocol_{}_{}_{}.db",
+        std::process::id(),
+        seq,
+        nanos
+    ));
     let contents = r#"
 record(ai, "SIM:AI") {
     field(VAL, "1.25")
