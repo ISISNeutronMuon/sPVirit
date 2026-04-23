@@ -618,6 +618,7 @@ impl PvaServerBuilder {
             extra_sources: self.extra_sources,
             config,
             scans: self.scans,
+            monitor_registry: None,
         }
     }
 }
@@ -647,6 +648,9 @@ pub struct PvaServer {
     extra_sources: Vec<(String, i32, Arc<dyn Source>)>,
     config: PvaServerConfig,
     scans: Vec<(String, Duration, ScanCallback)>,
+    /// Optional pre-supplied monitor registry so external code (e.g. Python
+    /// bindings) can notify monitors from outside `run()`.
+    monitor_registry: Option<Arc<MonitorRegistry>>,
 }
 
 impl PvaServer {
@@ -680,13 +684,35 @@ impl PvaServer {
         self.extra_sources.push((label.into(), order, source));
     }
 
+    /// Pre-supply the [`MonitorRegistry`] that [`Self::run`] will use.
+    ///
+    /// This lets external code (for example Python `Source` adapters)
+    /// hold onto the registry and publish monitor updates to subscribed
+    /// PVAccess clients from outside `run()`.
+    pub fn set_monitor_registry(&mut self, registry: Arc<MonitorRegistry>) {
+        self.monitor_registry = Some(registry);
+    }
+
+    /// Get a shared handle to the [`MonitorRegistry`] that will be used
+    /// when [`Self::run`] starts.  Creates (and stores) a new registry
+    /// on first call so external code can register before run.
+    pub fn monitor_registry(&mut self) -> Arc<MonitorRegistry> {
+        if self.monitor_registry.is_none() {
+            self.monitor_registry = Some(Arc::new(MonitorRegistry::new()));
+        }
+        self.monitor_registry.as_ref().unwrap().clone()
+    }
+
     /// Start the PVA server (UDP search + TCP handler + beacon + scan tasks).
     ///
     /// This blocks until the server is shut down or an error occurs.
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         // Create the monitor registry early so scan tasks can notify
         // PVAccess monitor clients when values change.
-        let registry = Arc::new(MonitorRegistry::new());
+        let registry = self
+            .monitor_registry
+            .clone()
+            .unwrap_or_else(|| Arc::new(MonitorRegistry::new()));
         self.store.set_registry(registry.clone()).await;
 
         // Build the source registry with the built-in store at order 0.

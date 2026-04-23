@@ -8,7 +8,8 @@ use tokio::sync::{Mutex, mpsc};
 use tracing::debug;
 
 use spvirit_codec::spvirit_encode::{
-    encode_monitor_data_response_filtered, encode_monitor_data_response_payload,
+    encode_monitor_data_response_delta, encode_monitor_data_response_filtered,
+    encode_monitor_data_response_payload,
 };
 use spvirit_types::NtPayload;
 
@@ -38,6 +39,46 @@ impl MonitorRegistry {
         }
     }
 
+    /// Build the wire bytes (if any) to send for `sub` given `payload`.
+    ///
+    /// Returns `Some(bytes)` when there is something new to send, in which
+    /// case the caller should also update `sub.last_snapshot` and apply any
+    /// pipeline credit accounting. Returns `None` when the update is a no-op
+    /// (duplicate of the last snapshot under the subscriber's field view) —
+    /// in that case the caller must NOT decrement `nfree`.
+    fn build_monitor_frame(sub: &MonitorSub, payload: &NtPayload) -> Option<Vec<u8>> {
+        let subcmd = 0x00;
+        // First frame: send the whole (possibly filtered) payload with bit 0 set.
+        let Some(prev) = sub.last_snapshot.as_ref() else {
+            let bytes = if let Some(ref desc) = sub.filtered_desc {
+                encode_monitor_data_response_filtered(
+                    sub.ioid, subcmd, payload, desc, sub.version, sub.is_be,
+                )
+            } else {
+                encode_monitor_data_response_payload(
+                    sub.ioid, subcmd, payload, sub.version, sub.is_be,
+                )
+            };
+            return Some(bytes);
+        };
+        // Subsequent frames.
+        if let Some(ref desc) = sub.filtered_desc {
+            // Filtered subscribers get a true sparse delta (may be None if the
+            // filtered view is unchanged).
+            encode_monitor_data_response_delta(
+                sub.ioid, subcmd, prev, payload, desc, sub.version, sub.is_be,
+            )
+        } else if prev == payload {
+            // Unfiltered subscriber, unchanged payload: suppress.
+            None
+        } else {
+            // Unfiltered subscriber, payload changed: send full.
+            Some(encode_monitor_data_response_payload(
+                sub.ioid, subcmd, payload, sub.version, sub.is_be,
+            ))
+        }
+    }
+
     /// Broadcast a monitor update for `pv_name` to all running subscribers.
     pub async fn notify_monitors(&self, pv_name: &str, payload: &NtPayload) {
         let mut to_send: Vec<(u64, Vec<u8>)> = Vec::new();
@@ -51,28 +92,14 @@ impl MonitorRegistry {
                     if sub.pipeline_enabled && sub.nfree == 0 {
                         continue;
                     }
-                    let subcmd = 0x00;
+                    let Some(msg) = Self::build_monitor_frame(sub, payload) else {
+                        // No-op update — preserve pipeline credit.
+                        continue;
+                    };
                     if sub.pipeline_enabled && sub.nfree > 0 {
                         sub.nfree -= 1;
                     }
-                    let msg = if let Some(ref desc) = sub.filtered_desc {
-                        encode_monitor_data_response_filtered(
-                            sub.ioid,
-                            subcmd,
-                            payload,
-                            desc,
-                            sub.version,
-                            sub.is_be,
-                        )
-                    } else {
-                        encode_monitor_data_response_payload(
-                            sub.ioid,
-                            subcmd,
-                            payload,
-                            sub.version,
-                            sub.is_be,
-                        )
-                    };
+                    sub.last_snapshot = Some(payload.clone());
                     to_send.push((sub.conn_id, msg));
                 }
             }
@@ -106,28 +133,13 @@ impl MonitorRegistry {
                     if sub.pipeline_enabled && sub.nfree == 0 {
                         return;
                     }
-                    let subcmd = 0x00;
+                    let Some(msg) = Self::build_monitor_frame(sub, payload) else {
+                        return;
+                    };
                     if sub.pipeline_enabled && sub.nfree > 0 {
                         sub.nfree -= 1;
                     }
-                    let msg = if let Some(ref desc) = sub.filtered_desc {
-                        encode_monitor_data_response_filtered(
-                            sub.ioid,
-                            subcmd,
-                            payload,
-                            desc,
-                            sub.version,
-                            sub.is_be,
-                        )
-                    } else {
-                        encode_monitor_data_response_payload(
-                            sub.ioid,
-                            subcmd,
-                            payload,
-                            sub.version,
-                            sub.is_be,
-                        )
-                    };
+                    sub.last_snapshot = Some(payload.clone());
                     to_send = Some((sub.conn_id, msg));
                 }
             }
@@ -189,5 +201,92 @@ impl MonitorRegistry {
             let mut conns = self.conns.lock().await;
             conns.remove(&conn_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use spvirit_codec::spvd_decode::StructureDesc;
+    use spvirit_codec::spvd_encode::{filter_structure_desc, nt_payload_desc};
+    use spvirit_types::{NtPayload, NtScalar, ScalarValue};
+
+    fn make_sub(filtered: Option<StructureDesc>) -> MonitorSub {
+        MonitorSub {
+            conn_id: 1,
+            ioid: 42,
+            version: 2,
+            is_be: false,
+            running: true,
+            pipeline_enabled: false,
+            nfree: 0,
+            filtered_desc: filtered,
+            last_snapshot: None,
+        }
+    }
+
+    fn nt_payload(value: f64, severity: i32) -> NtPayload {
+        let mut nt = NtScalar::from_value(ScalarValue::F64(value));
+        nt.alarm_severity = severity;
+        NtPayload::Scalar(nt)
+    }
+
+    #[test]
+    fn unfiltered_first_frame_full_then_suppress_duplicate_then_resend_on_change() {
+        let mut sub = make_sub(None);
+        let p1 = nt_payload(1.0, 0);
+
+        // First frame: full payload.
+        let f1 = MonitorRegistry::build_monitor_frame(&sub, &p1).expect("first frame");
+        assert!(!f1.is_empty());
+        sub.last_snapshot = Some(p1.clone());
+
+        // Same payload: suppressed.
+        assert!(
+            MonitorRegistry::build_monitor_frame(&sub, &p1).is_none(),
+            "identical unfiltered payload must be suppressed"
+        );
+
+        // Changed payload: full again.
+        let p2 = nt_payload(2.0, 0);
+        let f2 = MonitorRegistry::build_monitor_frame(&sub, &p2).expect("full on change");
+        assert!(!f2.is_empty());
+    }
+
+    #[test]
+    fn filtered_first_frame_then_delta_none_when_selected_fields_unchanged() {
+        // Subscriber only cares about alarm.severity.
+        let p1 = nt_payload(1.0, 0);
+        let full_desc = nt_payload_desc(&p1);
+        let filt = filter_structure_desc(&full_desc, &["alarm.severity".to_string()]);
+        let mut sub = make_sub(Some(filt));
+
+        let f1 = MonitorRegistry::build_monitor_frame(&sub, &p1).expect("first filtered frame");
+        assert!(!f1.is_empty());
+        sub.last_snapshot = Some(p1.clone());
+
+        // Value changed, but alarm.severity is unchanged in the filtered view.
+        let p2 = nt_payload(2.0, 0);
+        assert!(
+            MonitorRegistry::build_monitor_frame(&sub, &p2).is_none(),
+            "filtered delta must be None when selected fields unchanged"
+        );
+    }
+
+    #[test]
+    fn filtered_delta_emitted_when_selected_field_changes() {
+        let p1 = nt_payload(1.0, 0);
+        let full_desc = nt_payload_desc(&p1);
+        let filt = filter_structure_desc(&full_desc, &["alarm.severity".to_string()]);
+        let mut sub = make_sub(Some(filt));
+
+        let _ = MonitorRegistry::build_monitor_frame(&sub, &p1).expect("first");
+        sub.last_snapshot = Some(p1.clone());
+
+        // Severity changes: delta must be emitted.
+        let p2 = nt_payload(1.0, 2);
+        let delta = MonitorRegistry::build_monitor_frame(&sub, &p2)
+            .expect("delta required when selected field changes");
+        assert!(!delta.is_empty());
     }
 }

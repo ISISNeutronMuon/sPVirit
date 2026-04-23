@@ -6,6 +6,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::runtime::Runtime;
 
 use spvirit_client::pvput as high_level_pvput;
+use spvirit_client::pvput_fields as high_level_pvput_fields;
 use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
 use spvirit_codec::spvirit_encode::encode_header;
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
@@ -180,9 +181,24 @@ async fn pvput(
     input: &Value,
     simple_flow: bool,
     no_flow_fallback: bool,
+    fields: &[String],
 ) -> Result<(), PvGetError> {
+    let do_high_level = |opts: &PvGetOptions, input: &Value| {
+        let opts = opts.clone();
+        let input = input.clone();
+        let fields = fields.to_vec();
+        async move {
+            if fields.is_empty() {
+                high_level_pvput(&opts, input).await
+            } else {
+                let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
+                high_level_pvput_fields(&opts, input, &refs).await
+            }
+        }
+    };
+
     if simple_flow {
-        high_level_pvput(opts, input.clone()).await?;
+        do_high_level(opts, input).await?;
         println!("{} OK", opts.pv_name);
         return Ok(());
     }
@@ -197,7 +213,7 @@ async fn pvput(
                 return Err(primary_err);
             }
 
-            high_level_pvput(opts, input.clone()).await?;
+            do_high_level(opts, input).await?;
             println!("{} OK", opts.pv_name);
             Ok(())
         }
@@ -279,11 +295,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let fields = common.fields_list();
     let opts = common.into_pv_get_options(pv_name.clone())?;
 
     let rt = Runtime::new()?;
     let result =
-        rt.block_on(async move { pvput(&opts, &input, simple_flow, no_flow_fallback).await });
+        rt.block_on(async move { pvput(&opts, &input, simple_flow, no_flow_fallback, &fields).await });
     match result {
         Ok(()) => Ok(()),
         Err(e) => {

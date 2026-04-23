@@ -47,7 +47,8 @@ pub mod types;
 
 // --- Re-exports: high-level API ---
 pub use pva_client::{
-    PvaChannel, PvaClient, PvaClientBuilder, client_from_opts, pvinfo, pvmonitor, pvput,
+    PvaChannel, PvaClient, PvaClientBuilder, client_from_opts, pvinfo, pvmonitor,
+    pvmonitor_fields, pvput, pvput_fields,
 };
 pub use pvlist::PvListSource;
 

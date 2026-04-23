@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use spvirit_codec::spvd_decode::StructureDesc;
+use spvirit_types::NtPayload;
 
 #[derive(Debug, Default)]
 pub struct ConnState {
@@ -22,6 +23,10 @@ pub struct MonitorSub {
     pub nfree: u32,
     /// When set, only encode these fields in monitor data responses.
     pub filtered_desc: Option<StructureDesc>,
+    /// Last payload sent to this subscriber. Used to produce sparse deltas on
+    /// subsequent updates (see `spvirit-server/src/monitor.rs`). `None` means
+    /// the next update is the initial full snapshot.
+    pub last_snapshot: Option<NtPayload>,
 }
 
 #[derive(Debug, Clone, Copy)]

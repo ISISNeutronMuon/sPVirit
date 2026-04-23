@@ -40,3 +40,19 @@ pub fn to_py_err(e: PvGetError) -> PyErr {
         PvGetError::Decode(ctx) => DecodeError::new_err(ctx),
     }
 }
+
+/// Convert a raw `std::io::Error` into the matching Python exception.
+#[allow(dead_code)]
+pub fn io_to_py_err(e: std::io::Error) -> PyErr {
+    IoError::new_err(e.to_string())
+}
+
+/// Convert a codec / decode string error to `DecodeError`.
+pub fn decode_msg_to_py_err(msg: impl Into<String>) -> PyErr {
+    DecodeError::new_err(msg.into())
+}
+
+/// Convert a protocol string error to `ProtocolError`.
+pub fn protocol_msg_to_py_err(msg: impl Into<String>) -> PyErr {
+    ProtocolError::new_err(msg.into())
+}

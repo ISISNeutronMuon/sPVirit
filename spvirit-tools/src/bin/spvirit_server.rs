@@ -21,7 +21,12 @@ use spvirit_tools::spvirit_server::types::{
 use spvirit_codec::epics_decode::{PvaHeader, PvaPacket, PvaPacketCommand};
 use spvirit_codec::spvd_decode::{DecodedValue, PvdDecoder};
 use spvirit_codec::spvd_decode::{FieldDesc, FieldType, StructureDesc, TypeCode};
-use spvirit_codec::spvd_encode::{encode_size_pvd, nt_payload_desc};
+use spvirit_codec::spvd_encode::{
+    decode_pv_request_fields, encode_size_pvd, filter_structure_desc, nt_payload_desc,
+};
+use spvirit_codec::spvirit_encode::{
+    encode_monitor_data_response_delta, encode_monitor_data_response_filtered,
+};
 use spvirit_codec::spvirit_encode::encode_control_message;
 use spvirit_codec::spvirit_encode::{
     encode_beacon, encode_connection_validation, encode_create_channel_error,
@@ -1097,7 +1102,13 @@ async fn handle_connection(
                                 .await;
                                 continue;
                             };
-                            let desc = nt_payload_desc(&nt);
+                            let full_desc = nt_payload_desc(&nt);
+                            let pv_req_fields =
+                                decode_pv_request_fields(&payload.body, is_be);
+                            let desc = match &pv_req_fields {
+                                Some(fields) => filter_structure_desc(&full_desc, fields),
+                                None => full_desc,
+                            };
                             conn_state.ioid_to_desc.insert(ioid, desc.clone());
                             conn_state.ioid_to_pv.insert(ioid, pv_name.clone());
                             let pipeline_enabled = (payload.subcmd & 0x80) != 0;
@@ -1149,7 +1160,8 @@ async fn handle_connection(
                                     running: false,
                                     pipeline_enabled,
                                     nfree,
-                                    filtered_desc: None,
+                                    filtered_desc: Some(desc.clone()),
+                                    last_snapshot: None,
                                 });
                             info!(
                                 "Conn {}: monitor init pv='{}' ioid={}",
@@ -1595,17 +1607,13 @@ async fn notify_monitors(state: &Arc<ServerState>, pv_name: &str, payload: &NtPa
                 if sub.pipeline_enabled && sub.nfree == 0 {
                     continue;
                 }
-                let subcmd = 0x00;
+                let Some(msg) = build_monitor_frame(sub, payload) else {
+                    continue;
+                };
                 if sub.pipeline_enabled && sub.nfree > 0 {
                     sub.nfree -= 1;
                 }
-                let msg = encode_monitor_data_response_payload(
-                    sub.ioid,
-                    subcmd,
-                    payload,
-                    sub.version,
-                    sub.is_be,
-                );
+                sub.last_snapshot = Some(payload.clone());
                 to_send.push((sub.conn_id, msg));
             }
         }
@@ -1614,6 +1622,33 @@ async fn notify_monitors(state: &Arc<ServerState>, pv_name: &str, payload: &NtPa
     for (conn_id, msg) in to_send {
         send_msg(state, conn_id, msg).await;
         debug!("Monitor update pv='{}' conn={} ", pv_name, conn_id);
+    }
+}
+
+fn build_monitor_frame(sub: &MonitorSub, payload: &NtPayload) -> Option<Vec<u8>> {
+    let subcmd = 0x00;
+    let Some(prev) = sub.last_snapshot.as_ref() else {
+        let bytes = if let Some(ref desc) = sub.filtered_desc {
+            encode_monitor_data_response_filtered(
+                sub.ioid, subcmd, payload, desc, sub.version, sub.is_be,
+            )
+        } else {
+            encode_monitor_data_response_payload(
+                sub.ioid, subcmd, payload, sub.version, sub.is_be,
+            )
+        };
+        return Some(bytes);
+    };
+    if let Some(ref desc) = sub.filtered_desc {
+        encode_monitor_data_response_delta(
+            sub.ioid, subcmd, prev, payload, desc, sub.version, sub.is_be,
+        )
+    } else if prev == payload {
+        None
+    } else {
+        Some(encode_monitor_data_response_payload(
+            sub.ioid, subcmd, payload, sub.version, sub.is_be,
+        ))
     }
 }
 
@@ -1638,17 +1673,13 @@ async fn send_monitor_update_for(
                 if sub.pipeline_enabled && sub.nfree == 0 {
                     return;
                 }
-                let subcmd = 0x00;
+                let Some(msg) = build_monitor_frame(sub, payload) else {
+                    return;
+                };
                 if sub.pipeline_enabled && sub.nfree > 0 {
                     sub.nfree -= 1;
                 }
-                let msg = encode_monitor_data_response_payload(
-                    sub.ioid,
-                    subcmd,
-                    payload,
-                    sub.version,
-                    sub.is_be,
-                );
+                sub.last_snapshot = Some(payload.clone());
                 to_send = Some((sub.conn_id, msg));
             }
         }

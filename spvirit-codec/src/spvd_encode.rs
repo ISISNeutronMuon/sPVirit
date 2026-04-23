@@ -1383,239 +1383,509 @@ pub fn encode_decoded_value(val: &DecodedValue, is_be: bool) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 
 /// Parse a pvRequest structure from the INIT body bytes and return the list
-/// of requested top-level field names.
+/// of requested field paths.
 ///
-/// Returns `None` if the body is empty or cannot be parsed, which should be
-/// treated as "return all fields" (no filtering).
+/// Paths are returned as dot-separated strings (e.g. `"value"`,
+/// `"alarm.severity"`). An empty inner `field {}` structure, or a body that
+/// cannot be parsed, is reported as `None`, meaning "return all fields" (no
+/// filtering).
+///
+/// A field whose inner pvRequest sub-structure is itself empty selects the
+/// whole sub-tree rooted at that field (so `field(alarm)` → `["alarm"]`
+/// selects the entire `alarm` structure). Non-empty sub-structures expand
+/// into one entry per leaf path (so `field(alarm{severity}) →
+/// ["alarm.severity"]`).
 pub fn decode_pv_request_fields(body: &[u8], is_be: bool) -> Option<Vec<String>> {
     if body.is_empty() {
         return None;
     }
     let decoder = crate::spvd_decode::PvdDecoder::new(is_be);
     let desc = decoder.parse_introspection(body)?;
-    // Find the "field" sub-structure.
     for field in &desc.fields {
         if field.name == "field" {
             if let FieldType::Structure(ref inner) = field.field_type {
                 if inner.fields.is_empty() {
-                    // Empty "field {}" means all fields.
                     return None;
                 }
-                let names: Vec<String> = inner.fields.iter().map(|f| f.name.clone()).collect();
-                return Some(names);
+                let mut paths = Vec::new();
+                collect_pv_request_paths(inner, "", &mut paths);
+                if paths.is_empty() {
+                    return None;
+                }
+                return Some(paths);
             }
         }
     }
     None
 }
 
-/// Filter a [`StructureDesc`] to include only the listed top-level field
-/// names.  Unknown names are silently ignored.  If `requested` is empty the
-/// original descriptor is returned unchanged.
+fn collect_pv_request_paths(desc: &StructureDesc, prefix: &str, out: &mut Vec<String>) {
+    for field in &desc.fields {
+        let joined = if prefix.is_empty() {
+            field.name.clone()
+        } else {
+            format!("{}.{}", prefix, field.name)
+        };
+        match &field.field_type {
+            FieldType::Structure(nested) if !nested.fields.is_empty() => {
+                collect_pv_request_paths(nested, &joined, out);
+            }
+            _ => out.push(joined),
+        }
+    }
+}
+
+/// Filter a [`StructureDesc`] to include only the listed field paths.
+///
+/// Paths may be dot-separated to descend into nested structures (e.g.
+/// `"alarm.severity"`). A bare name selects the entire sub-tree rooted at
+/// that field. Unknown paths are silently dropped. If `requested` is empty
+/// the original descriptor is returned unchanged.
 pub fn filter_structure_desc(desc: &StructureDesc, requested: &[String]) -> StructureDesc {
     if requested.is_empty() {
         return desc.clone();
     }
-    StructureDesc {
-        struct_id: desc.struct_id.clone(),
-        fields: desc
-            .fields
+    let tree = build_path_tree(requested);
+    prune_structure(desc, &tree)
+}
+
+#[derive(Default, Debug, Clone)]
+struct PathNode {
+    /// When true, the whole sub-tree rooted at this node is selected and
+    /// `children` should be ignored.
+    select_all: bool,
+    /// Insertion-ordered children. Using a Vec of pairs rather than a map
+    /// preserves the field order implied by the caller, which matters for
+    /// the PVA wire format (introspection field order is significant).
+    children: Vec<(String, PathNode)>,
+}
+
+impl PathNode {
+    fn child_mut(&mut self, name: &str) -> &mut PathNode {
+        if let Some(idx) = self.children.iter().position(|(n, _)| n == name) {
+            return &mut self.children[idx].1;
+        }
+        self.children.push((name.to_string(), PathNode::default()));
+        &mut self.children.last_mut().unwrap().1
+    }
+
+    fn child(&self, name: &str) -> Option<&PathNode> {
+        self.children
             .iter()
-            .filter(|f| requested.iter().any(|r| r == &f.name))
-            .cloned()
-            .collect(),
+            .find(|(n, _)| n == name)
+            .map(|(_, c)| c)
     }
 }
 
-/// Encode only the fields of an [`NtPayload`] whose names appear in
-/// `desc`.  The bitset and value bytes are computed against the filtered
-/// descriptor so that a client that received the filtered INIT descriptor
-/// will decode them correctly.
+fn build_path_tree(paths: &[String]) -> PathNode {
+    let mut root = PathNode::default();
+    for p in paths {
+        let parts: Vec<&str> = p.split('.').filter(|s| !s.is_empty()).collect();
+        if parts.is_empty() {
+            continue;
+        }
+        let mut node = &mut root;
+        for (i, part) in parts.iter().enumerate() {
+            let is_last = i == parts.len() - 1;
+            let child = node.child_mut(part);
+            if is_last {
+                child.select_all = true;
+                child.children.clear();
+            }
+            node = child;
+        }
+    }
+    root
+}
+
+fn prune_structure(desc: &StructureDesc, node: &PathNode) -> StructureDesc {
+    if node.select_all {
+        return desc.clone();
+    }
+    let mut fields = Vec::new();
+    for field in &desc.fields {
+        let Some(child) = node.child(&field.name) else {
+            continue;
+        };
+        if child.select_all {
+            fields.push(field.clone());
+            continue;
+        }
+        match &field.field_type {
+            FieldType::Structure(inner) => {
+                let pruned = prune_structure(inner, child);
+                if !pruned.fields.is_empty() {
+                    fields.push(FieldDesc {
+                        name: field.name.clone(),
+                        field_type: FieldType::Structure(pruned),
+                    });
+                }
+            }
+            FieldType::StructureArray(inner) => {
+                // For structure arrays we can only narrow the element
+                // descriptor; we never drop the array field itself when a
+                // sub-path is requested.
+                let pruned = prune_structure(inner, child);
+                if !pruned.fields.is_empty() {
+                    fields.push(FieldDesc {
+                        name: field.name.clone(),
+                        field_type: FieldType::StructureArray(pruned),
+                    });
+                }
+            }
+            _ => {
+                // Leaf referenced with a deeper path – drop it (unresolved).
+            }
+        }
+    }
+    StructureDesc {
+        struct_id: desc.struct_id.clone(),
+        fields,
+    }
+}
+
+/// Encode only the fields of an [`NtPayload`] whose paths appear in
+/// `filtered_desc`.  The bitset and value bytes are computed against the
+/// filtered descriptor so that a client that received the filtered INIT
+/// descriptor will decode them correctly.
+///
+/// Supports nested filtering (e.g. a filtered descriptor that only contains
+/// `alarm.severity`).
 pub fn encode_nt_payload_filtered(
     payload: &NtPayload,
     filtered_desc: &StructureDesc,
     is_be: bool,
 ) -> (Vec<u8>, Vec<u8>) {
-    let requested: Vec<&str> = filtered_desc
-        .fields
-        .iter()
-        .map(|f| f.name.as_str())
-        .collect();
-    let full_desc = nt_payload_desc(payload);
-    let full_fields = &full_desc.fields;
-
-    // Map each field in the full descriptor to its encoded bytes.
-    let field_bytes: Vec<(&str, Vec<u8>)> = encode_nt_payload_fields(payload, full_fields, is_be);
-
-    // Build the filtered values and a full-set bitset over the filtered desc.
-    let mut values = Vec::new();
-    for (name, bytes) in &field_bytes {
-        if requested.iter().any(|r| *r == *name) {
-            values.extend_from_slice(bytes);
-        }
-    }
-
     let bitset = encode_structure_bitset(filtered_desc, is_be);
+    let values = encode_nt_payload_values_for_desc(payload, filtered_desc, is_be);
     (bitset, values)
 }
 
-/// Helper: encode each top-level field of an NtPayload separately, returning
-/// `(field_name, encoded_bytes)` pairs in descriptor order.
-fn encode_nt_table_field(nt: &NtTable, name: &str, is_be: bool) -> Vec<u8> {
-    match name {
-        "labels" => encode_string_array(&nt.labels, is_be),
-        "value" => {
-            let mut out = Vec::new();
-            for NtTableColumn { values, .. } in &nt.columns {
-                out.extend_from_slice(&encode_scalar_array_value_pvd(values, is_be));
-            }
-            out
-        }
-        _ => Vec::new(),
-    }
-}
-
-fn encode_nt_ndarray_field(nt: &NtNdArray, name: &str, is_be: bool) -> Vec<u8> {
-    match name {
-        "value" => encode_ndarray_union(&nt.value, is_be),
-        "codec" => {
-            let mut out = Vec::new();
-            out.extend_from_slice(&encode_string_pvd(&nt.codec.name, is_be));
-            out.extend_from_slice(&encode_codec_parameters(&nt.codec.parameters, is_be));
-            out
-        }
-        "compressedSize" => encode_i64(nt.compressed_size, is_be),
-        "uncompressedSize" => encode_i64(nt.uncompressed_size, is_be),
-        "dimension" => {
-            let mut out = encode_size_pvd(nt.dimension.len(), is_be);
-            for d in &nt.dimension {
-                out.push(1);
-                out.extend_from_slice(&encode_i32(d.size, is_be));
-                out.extend_from_slice(&encode_i32(d.offset, is_be));
-                out.extend_from_slice(&encode_i32(d.full_size, is_be));
-                out.extend_from_slice(&encode_i32(d.binning, is_be));
-                out.push(if d.reverse { 1 } else { 0 });
-            }
-            out
-        }
-        "uniqueId" => encode_i32(nt.unique_id, is_be),
-        "dataTimeStamp" => encode_nt_timestamp(&nt.data_time_stamp, is_be),
-        "attribute" => {
-            let mut out = encode_size_pvd(nt.attribute.len(), is_be);
-            for attr in &nt.attribute {
-                out.push(1);
-                out.extend_from_slice(&encode_string_pvd(&attr.name, is_be));
-                out.extend_from_slice(&encode_attribute_variant(attr, is_be));
-                out.extend_from_slice(&encode_string_pvd(&attr.descriptor, is_be));
-                out.extend_from_slice(&encode_i32(attr.source_type, is_be));
-                out.extend_from_slice(&encode_string_pvd(&attr.source, is_be));
-            }
-            out
-        }
-        "descriptor" => encode_string_pvd(nt.descriptor.as_deref().unwrap_or(""), is_be),
-        "alarm" => encode_nt_alarm(nt.alarm.as_ref().unwrap_or(&NtAlarm::default()), is_be),
-        "timeStamp" => encode_nt_timestamp(
-            nt.time_stamp.as_ref().unwrap_or(&NtTimeStamp::default()),
-            is_be,
-        ),
-        "display" => encode_nt_display(nt.display.as_ref().unwrap_or(&NtDisplay::default()), is_be),
-        _ => Vec::new(),
-    }
-}
-
-fn encode_nt_payload_fields<'a>(
-    payload: &'a NtPayload,
-    full_fields: &'a [FieldDesc],
+/// Encode the value bytes of an `NtPayload` projected onto a (possibly
+/// narrowed) descriptor. Fields not represented in `desc` are omitted;
+/// sub-structures are encoded recursively.
+pub fn encode_nt_payload_values_for_desc(
+    payload: &NtPayload,
+    desc: &StructureDesc,
     is_be: bool,
-) -> Vec<(&'a str, Vec<u8>)> {
-    // NTScalar field encoders
-    fn scalar_field(nt: &NtScalar, name: &str, is_be: bool) -> Vec<u8> {
-        match name {
-            "value" => encode_scalar_value(&nt.value, is_be),
-            "alarm" => encode_alarm(nt, is_be),
-            "timeStamp" => encode_timestamp(nt, is_be),
-            "display" => encode_display(nt, is_be),
-            "control" => encode_control(nt, is_be),
-            "valueAlarm" => encode_value_alarm(nt, is_be),
-            _ => Vec::new(),
-        }
+) -> Vec<u8> {
+    let full_desc = nt_payload_desc(payload);
+    if structure_desc_equal(&full_desc, desc) {
+        // Fast path: no narrowing.
+        return encode_nt_payload_full(payload, is_be);
     }
+    let decoded = decode_payload_to_structure(payload, is_be).unwrap_or_else(|| {
+        DecodedValue::Structure(Vec::new())
+    });
+    encode_decoded_projected(&decoded, desc, is_be)
+}
 
-    fn scalar_array_field(nt: &NtScalarArray, name: &str, is_be: bool) -> Vec<u8> {
-        match name {
-            "value" => encode_scalar_array_value_pvd(&nt.value, is_be),
-            "alarm" => encode_nt_alarm(&nt.alarm, is_be),
-            "timeStamp" => encode_nt_timestamp(&nt.time_stamp, is_be),
-            "display" => encode_nt_display(&nt.display, is_be),
-            "control" => {
-                let mut out = Vec::new();
-                out.extend_from_slice(&encode_f64(nt.control.limit_low, is_be));
-                out.extend_from_slice(&encode_f64(nt.control.limit_high, is_be));
-                out.extend_from_slice(&encode_f64(nt.control.min_step, is_be));
-                out
+fn structure_desc_equal(a: &StructureDesc, b: &StructureDesc) -> bool {
+    if a.struct_id != b.struct_id {
+        return false;
+    }
+    if a.fields.len() != b.fields.len() {
+        return false;
+    }
+    a.fields.iter().zip(&b.fields).all(|(x, y)| {
+        x.name == y.name && field_type_equal(&x.field_type, &y.field_type)
+    })
+}
+
+fn field_type_equal(a: &FieldType, b: &FieldType) -> bool {
+    match (a, b) {
+        (FieldType::Scalar(x), FieldType::Scalar(y)) => x == y,
+        (FieldType::ScalarArray(x), FieldType::ScalarArray(y)) => x == y,
+        (FieldType::String, FieldType::String) => true,
+        (FieldType::StringArray, FieldType::StringArray) => true,
+        (FieldType::Structure(x), FieldType::Structure(y)) => structure_desc_equal(x, y),
+        (FieldType::StructureArray(x), FieldType::StructureArray(y)) => {
+            structure_desc_equal(x, y)
+        }
+        (FieldType::Variant, FieldType::Variant) => true,
+        (FieldType::VariantArray, FieldType::VariantArray) => true,
+        (FieldType::BoundedString(x), FieldType::BoundedString(y)) => x == y,
+        // Treat unions as equal only by count (rare in NT; fine for fast-path).
+        (FieldType::Union(x), FieldType::Union(y)) => x.len() == y.len(),
+        (FieldType::UnionArray(x), FieldType::UnionArray(y)) => x.len() == y.len(),
+        _ => false,
+    }
+}
+
+/// Round-trip an NtPayload through its full descriptor to obtain a
+/// `DecodedValue::Structure` we can project against a narrowed descriptor.
+fn decode_payload_to_structure(payload: &NtPayload, is_be: bool) -> Option<DecodedValue> {
+    let desc = nt_payload_desc(payload);
+    let bytes = encode_nt_payload_full(payload, is_be);
+    let decoder = crate::spvd_decode::PvdDecoder::new(is_be);
+    decoder.decode_structure(&bytes, &desc).map(|(v, _)| v)
+}
+
+/// Re-encode a `DecodedValue::Structure` against a (possibly narrowed)
+/// descriptor, omitting fields that are not present in the descriptor.
+pub fn encode_decoded_projected(
+    value: &DecodedValue,
+    desc: &StructureDesc,
+    is_be: bool,
+) -> Vec<u8> {
+    let DecodedValue::Structure(fields) = value else {
+        // Fallback: not a structure – emit raw bytes.
+        return encode_decoded_value(value, is_be);
+    };
+    let mut out = Vec::new();
+    for target in &desc.fields {
+        let Some((_, sub_value)) = fields.iter().find(|(n, _)| n == &target.name) else {
+            continue;
+        };
+        match &target.field_type {
+            FieldType::Structure(inner) => {
+                out.extend_from_slice(&encode_decoded_projected(sub_value, inner, is_be));
             }
-            _ => Vec::new(),
+            _ => {
+                out.extend_from_slice(&encode_decoded_value(sub_value, is_be));
+            }
         }
     }
+    out
+}
 
-    fn enum_field(nt: &NtEnum, name: &str, is_be: bool) -> Vec<u8> {
-        match name {
-            "value" => encode_enum(nt.index, &nt.choices, is_be),
-            "alarm" => encode_nt_alarm(&nt.alarm, is_be),
-            "timeStamp" => encode_nt_timestamp(&nt.time_stamp, is_be),
-            _ => Vec::new(),
+// ---------------------------------------------------------------------------
+// Sparse delta encoding (Phase 3)
+// ---------------------------------------------------------------------------
+
+/// Project an [`NtPayload`] onto `desc`, returning a [`DecodedValue::Structure`]
+/// that contains only the fields represented in `desc`. Missing descriptor
+/// fields are silently dropped.
+fn project_payload_on_desc(
+    payload: &NtPayload,
+    desc: &StructureDesc,
+    is_be: bool,
+) -> DecodedValue {
+    let decoded = decode_payload_to_structure(payload, is_be)
+        .unwrap_or_else(|| DecodedValue::Structure(Vec::new()));
+    project_decoded(&decoded, desc)
+}
+
+fn project_decoded(value: &DecodedValue, desc: &StructureDesc) -> DecodedValue {
+    let DecodedValue::Structure(fields) = value else {
+        return value.clone();
+    };
+    let mut out: Vec<(String, DecodedValue)> = Vec::new();
+    for target in &desc.fields {
+        let Some((_, v)) = fields.iter().find(|(n, _)| n == &target.name) else {
+            continue;
+        };
+        match &target.field_type {
+            FieldType::Structure(inner) => {
+                out.push((target.name.clone(), project_decoded(v, inner)));
+            }
+            _ => {
+                out.push((target.name.clone(), v.clone()));
+            }
         }
     }
+    DecodedValue::Structure(out)
+}
 
-    full_fields
-        .iter()
-        .map(|f| {
-            let name = f.name.as_str();
-            let bytes = match payload {
-                NtPayload::Scalar(nt) => scalar_field(nt, name, is_be),
-                NtPayload::ScalarArray(nt) => scalar_array_field(nt, name, is_be),
-                NtPayload::Table(nt) => encode_nt_table_field(nt, name, is_be),
-                NtPayload::NdArray(nt) => encode_nt_ndarray_field(nt, name, is_be),
-                NtPayload::Enum(nt) => enum_field(nt, name, is_be),
-                NtPayload::Generic { fields, .. } => {
-                    if let Some((_, v)) = fields.iter().find(|(n, _)| n == name) {
-                        encode_pv_value(v, is_be)
-                    } else {
-                        Vec::new()
+/// Structural equality for [`DecodedValue`] with NaN treated as equal to NaN
+/// (avoids spurious monitor flaps when a float field is NaN on both sides).
+pub fn decoded_values_equal(a: &DecodedValue, b: &DecodedValue) -> bool {
+    use DecodedValue::*;
+    match (a, b) {
+        (Null, Null) => true,
+        (Boolean(x), Boolean(y)) => x == y,
+        (Int8(x), Int8(y)) => x == y,
+        (Int16(x), Int16(y)) => x == y,
+        (Int32(x), Int32(y)) => x == y,
+        (Int64(x), Int64(y)) => x == y,
+        (UInt8(x), UInt8(y)) => x == y,
+        (UInt16(x), UInt16(y)) => x == y,
+        (UInt32(x), UInt32(y)) => x == y,
+        (UInt64(x), UInt64(y)) => x == y,
+        (Float32(x), Float32(y)) => x == y || (x.is_nan() && y.is_nan()),
+        (Float64(x), Float64(y)) => x == y || (x.is_nan() && y.is_nan()),
+        (String(x), String(y)) => x == y,
+        (Raw(x), Raw(y)) => x == y,
+        (Array(x), Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(a, b)| decoded_values_equal(a, b))
+        }
+        (Structure(x), Structure(y)) => {
+            x.len() == y.len()
+                && x.iter().zip(y).all(|((ln, lv), (rn, rv))| {
+                    ln == rn && decoded_values_equal(lv, rv)
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Walks `desc` in pre-order (matching the PVA wire convention that bit 0
+/// represents the whole root structure and subsequent bits correspond to
+/// fields in pre-order) and returns a per-bit flag vector marking leaves
+/// whose value differs between `prev` and `next`.
+///
+/// Returns `None` if no leaves changed. Structure-type fields always have
+/// their bit cleared — changes propagate to the descendants so a filtered
+/// monitor client sees only the true differences.
+pub fn compute_changed_bits(
+    prev: &DecodedValue,
+    next: &DecodedValue,
+    desc: &StructureDesc,
+) -> Option<Vec<bool>> {
+    let total = 1 + spvd_count_structure_fields(desc);
+    let mut bits = vec![false; total];
+    let mut idx = 1usize;
+    let any = fill_changed_bits(prev, next, desc, &mut bits, &mut idx);
+    if any { Some(bits) } else { None }
+}
+
+fn get_field_by_name<'a>(val: &'a DecodedValue, name: &str) -> Option<&'a DecodedValue> {
+    match val {
+        DecodedValue::Structure(f) => f.iter().find(|(n, _)| n == name).map(|(_, v)| v),
+        _ => None,
+    }
+}
+
+fn fill_changed_bits(
+    prev: &DecodedValue,
+    next: &DecodedValue,
+    desc: &StructureDesc,
+    bits: &mut [bool],
+    idx: &mut usize,
+) -> bool {
+    let mut any = false;
+    for field in &desc.fields {
+        let this = *idx;
+        *idx += 1;
+        let p = get_field_by_name(prev, &field.name);
+        let n = get_field_by_name(next, &field.name);
+        match &field.field_type {
+            FieldType::Structure(inner) => {
+                let empty = DecodedValue::Structure(Vec::new());
+                let pv = p.unwrap_or(&empty);
+                let nv = n.unwrap_or(&empty);
+                if fill_changed_bits(pv, nv, inner, bits, idx) {
+                    any = true;
+                }
+            }
+            _ => {
+                let changed = match (p, n) {
+                    (Some(a), Some(b)) => !decoded_values_equal(a, b),
+                    (Some(_), None) | (None, Some(_)) => true,
+                    (None, None) => false,
+                };
+                if changed {
+                    bits[this] = true;
+                    any = true;
+                }
+            }
+        }
+    }
+    any
+}
+
+fn encode_values_for_bits(
+    value: &DecodedValue,
+    desc: &StructureDesc,
+    bits: &[bool],
+    idx: &mut usize,
+    is_be: bool,
+    out: &mut Vec<u8>,
+) {
+    for field in &desc.fields {
+        let this = *idx;
+        *idx += 1;
+        let sub = get_field_by_name(value, &field.name);
+        match &field.field_type {
+            FieldType::Structure(inner) => {
+                let empty = DecodedValue::Structure(Vec::new());
+                let v = sub.unwrap_or(&empty);
+                encode_values_for_bits(v, inner, bits, idx, is_be, out);
+            }
+            _ => {
+                if bits[this] {
+                    if let Some(v) = sub {
+                        out.extend_from_slice(&encode_decoded_value(v, is_be));
                     }
                 }
-            };
-            (name, bytes)
-        })
-        .collect()
+            }
+        }
+    }
+}
+
+fn encode_bitset_from_flags(bits: &[bool], is_be: bool) -> Vec<u8> {
+    let bitset_size = (bits.len() + 7) / 8;
+    let mut bitset = vec![0u8; bitset_size];
+    for (i, b) in bits.iter().enumerate() {
+        if *b {
+            bitset[i / 8] |= 1 << (i % 8);
+        }
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(&encode_size_pvd(bitset_size, is_be));
+    out.extend_from_slice(&bitset);
+    out
+}
+
+/// Encode a sparse monitor-data delta between `prev` and `next` projected onto
+/// `filtered_desc`. Returns `None` if nothing changed in the filtered view
+/// (caller should suppress the update). Otherwise returns `(bitset, values)`
+/// with only the changed leaves marked and encoded.
+pub fn encode_nt_payload_delta(
+    prev: &NtPayload,
+    next: &NtPayload,
+    filtered_desc: &StructureDesc,
+    is_be: bool,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let prev_proj = project_payload_on_desc(prev, filtered_desc, is_be);
+    let next_proj = project_payload_on_desc(next, filtered_desc, is_be);
+    let bits = compute_changed_bits(&prev_proj, &next_proj, filtered_desc)?;
+    let bitset = encode_bitset_from_flags(&bits, is_be);
+    let mut values = Vec::new();
+    let mut idx = 1usize;
+    encode_values_for_bits(&next_proj, filtered_desc, &bits, &mut idx, is_be, &mut values);
+    Some((bitset, values))
+}
+
+fn spvd_count_structure_fields(desc: &StructureDesc) -> usize {
+    let mut count = 0;
+    for field in &desc.fields {
+        count += 1;
+        if let FieldType::Structure(inner) = &field.field_type {
+            count += spvd_count_structure_fields(inner);
+        }
+    }
+    count
 }
 
 // ---------------------------------------------------------------------------
 // pvRequest builder
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// pvRequest builder
+// ---------------------------------------------------------------------------
 
-/// Build a pvRequest structure for the given top-level field names.
+/// Build a pvRequest structure for the given field paths.
 ///
-/// Produces the byte sequence that a client sends inside an INIT request to
-/// select which fields to subscribe to, e.g.
-/// `encode_pv_request(&["value", "alarm", "timeStamp"], false)` produces the
-/// equivalent of `field(value,alarm,timeStamp)`.
+/// Each entry may be a simple top-level name (e.g. `"value"`) or a
+/// dot-separated nested path (e.g. `"alarm.severity"`,
+/// `"timeStamp.secondsPastEpoch"`).
 ///
-/// The output is the *full* type-described pvRequest structure: a `0xFD` /
-/// `0x80` tag followed by the structure descriptor and empty-struct field values.
+/// A bare name selects the entire sub-tree rooted at that field. Nested
+/// paths produce the corresponding nested sub-structure in the pvRequest so
+/// that a PVA server can filter down to the requested leaves.
+///
+/// Examples:
+/// - `encode_pv_request(&["value", "alarm", "timeStamp"], false)` →
+///   `field(value,alarm,timeStamp)`
+/// - `encode_pv_request(&["alarm.severity"], false)` →
+///   `field(alarm{severity})`
+///
+/// The output is the *full* type-described pvRequest structure: a `0x80`
+/// tag followed by the structure descriptor and empty-struct field values.
 pub fn encode_pv_request(fields: &[&str], is_be: bool) -> Vec<u8> {
-    // Build inner "field" structure descriptor: each requested field is an
-    // empty sub-structure (no fields).
-    let inner_fields: Vec<FieldDesc> = fields
-        .iter()
-        .map(|name| FieldDesc {
-            name: name.to_string(),
-            field_type: FieldType::Structure(StructureDesc {
-                struct_id: None,
-                fields: Vec::new(),
-            }),
-        })
-        .collect();
+    let tree = build_path_tree_from_strs(fields);
+    let inner_fields = path_tree_to_field_descs(&tree);
 
     let field_desc = StructureDesc {
         struct_id: None,
@@ -1636,6 +1906,31 @@ pub fn encode_pv_request(fields: &[&str], is_be: bool) -> Vec<u8> {
     // Values: the field structure and all its children are empty structs, so
     // there are no value bytes to write.
     out
+}
+
+fn build_path_tree_from_strs(paths: &[&str]) -> PathNode {
+    let owned: Vec<String> = paths.iter().map(|s| (*s).to_string()).collect();
+    build_path_tree(&owned)
+}
+
+fn path_tree_to_field_descs(node: &PathNode) -> Vec<FieldDesc> {
+    node.children
+        .iter()
+        .map(|(name, child)| {
+            let nested_fields = if child.select_all {
+                Vec::new()
+            } else {
+                path_tree_to_field_descs(child)
+            };
+            FieldDesc {
+                name: name.clone(),
+                field_type: FieldType::Structure(StructureDesc {
+                    struct_id: None,
+                    fields: nested_fields,
+                }),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1720,5 +2015,213 @@ mod tests {
             data_bytes.len(),
             "consumed should match data_bytes.len()"
         );
+    }
+
+    #[test]
+    fn pv_request_flat_roundtrip() {
+        for is_be in [false, true] {
+            let body = encode_pv_request(&["value", "alarm", "timeStamp"], is_be);
+            let fields = decode_pv_request_fields(&body, is_be).expect("fields");
+            assert_eq!(fields, vec!["value", "alarm", "timeStamp"]);
+        }
+    }
+
+    #[test]
+    fn pv_request_nested_roundtrip() {
+        let body = encode_pv_request(&["alarm.severity", "timeStamp.secondsPastEpoch"], false);
+        let fields = decode_pv_request_fields(&body, false).expect("fields");
+        assert_eq!(
+            fields,
+            vec!["alarm.severity".to_string(), "timeStamp.secondsPastEpoch".to_string()]
+        );
+    }
+
+    #[test]
+    fn pv_request_whole_subtree_beats_leaf() {
+        // Requesting both "alarm" and "alarm.severity" should collapse to the
+        // whole-subtree selection.
+        let body = encode_pv_request(&["alarm.severity", "alarm"], false);
+        let fields = decode_pv_request_fields(&body, false).expect("fields");
+        assert_eq!(fields, vec!["alarm".to_string()]);
+    }
+
+    #[test]
+    fn pv_request_empty_body_none() {
+        assert!(decode_pv_request_fields(&[], false).is_none());
+    }
+
+    #[test]
+    fn filter_structure_desc_nested() {
+        let alarm = StructureDesc {
+            struct_id: Some("alarm_t".to_string()),
+            fields: vec![
+                FieldDesc { name: "severity".into(), field_type: FieldType::Scalar(TypeCode::Int32) },
+                FieldDesc { name: "status".into(),   field_type: FieldType::Scalar(TypeCode::Int32) },
+                FieldDesc { name: "message".into(),  field_type: FieldType::String },
+            ],
+        };
+        let desc = StructureDesc {
+            struct_id: Some("epics:nt/NTScalar:1.0".into()),
+            fields: vec![
+                FieldDesc { name: "value".into(), field_type: FieldType::Scalar(TypeCode::Float64) },
+                FieldDesc { name: "alarm".into(), field_type: FieldType::Structure(alarm.clone()) },
+            ],
+        };
+
+        let pruned = filter_structure_desc(&desc, &["alarm.severity".to_string()]);
+        assert_eq!(pruned.fields.len(), 1);
+        assert_eq!(pruned.fields[0].name, "alarm");
+        match &pruned.fields[0].field_type {
+            FieldType::Structure(inner) => {
+                assert_eq!(inner.fields.len(), 1);
+                assert_eq!(inner.fields[0].name, "severity");
+            }
+            other => panic!("expected Structure, got {:?}", other),
+        }
+
+        // Whole-subtree selection preserves the full alarm.
+        let pruned_all = filter_structure_desc(&desc, &["alarm".to_string()]);
+        match &pruned_all.fields[0].field_type {
+            FieldType::Structure(inner) => assert_eq!(inner.fields.len(), 3),
+            other => panic!("expected Structure, got {:?}", other),
+        }
+
+        // Unknown paths are silently dropped.
+        let pruned_unknown = filter_structure_desc(&desc, &["nope".into(), "alarm.missing".into()]);
+        assert!(pruned_unknown.fields.is_empty());
+    }
+
+    #[test]
+    fn filtered_monitor_round_trip_nested() {
+        use crate::spvd_decode::PvdDecoder;
+        use spvirit_types::{NtPayload, NtScalar, ScalarValue};
+
+        let mut nt = NtScalar::from_value(ScalarValue::F64(42.0));
+        nt.alarm_severity = 2;
+        nt.alarm_status = 7;
+        nt.alarm_message = "hi".into();
+        let payload = NtPayload::Scalar(nt);
+
+        // Client sends field(alarm.severity).
+        let full_desc = nt_payload_desc(&payload);
+        let paths = vec!["alarm.severity".to_string()];
+        let filtered = filter_structure_desc(&full_desc, &paths);
+        let (bitset, values) = encode_nt_payload_filtered(&payload, &filtered, false);
+
+        // Round-trip the filtered body using the filtered descriptor.
+        let decoder = PvdDecoder::new(false);
+        let mut body = bitset.clone();
+        body.extend_from_slice(&values);
+        let (decoded, _) = decoder
+            .decode_structure_with_bitset(&body, &filtered)
+            .expect("decode filtered");
+
+        let DecodedValue::Structure(fields) = decoded else {
+            panic!("expected structure");
+        };
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].0, "alarm");
+        match &fields[0].1 {
+            DecodedValue::Structure(inner) => {
+                assert_eq!(inner.len(), 1);
+                assert_eq!(inner[0].0, "severity");
+                assert!(matches!(inner[0].1, DecodedValue::Int32(2)));
+            }
+            other => panic!("expected Structure, got {:?}", other),
+        }
+
+        // Verify that the filtered payload is genuinely smaller than an
+        // unfiltered one (proves we're not emitting status/message bytes).
+        let full_body_len = encode_nt_payload_full(&payload, false).len();
+        assert!(values.len() < full_body_len);
+    }
+
+    #[test]
+    fn delta_returns_none_when_nothing_changed() {
+        use spvirit_types::{NtPayload, NtScalar, ScalarValue};
+        let mut a = NtScalar::from_value(ScalarValue::F64(1.0));
+        a.alarm_severity = 1;
+        let p1 = NtPayload::Scalar(a.clone());
+        let p2 = NtPayload::Scalar(a);
+        let desc = filter_structure_desc(&nt_payload_desc(&p1), &["alarm.severity".to_string()]);
+        assert!(encode_nt_payload_delta(&p1, &p2, &desc, false).is_none());
+    }
+
+    #[test]
+    fn delta_marks_only_changed_leaf() {
+        use crate::spvd_decode::PvdDecoder;
+        use spvirit_types::{NtPayload, NtScalar, ScalarValue};
+
+        let mut a = NtScalar::from_value(ScalarValue::F64(1.0));
+        a.alarm_severity = 1;
+        a.alarm_status = 0;
+        a.alarm_message = "ok".into();
+        let mut b = a.clone();
+        b.alarm_severity = 2; // only this leaf changes
+        let p1 = NtPayload::Scalar(a);
+        let p2 = NtPayload::Scalar(b);
+        let desc = filter_structure_desc(
+            &nt_payload_desc(&p1),
+            &[
+                "alarm.severity".to_string(),
+                "alarm.status".to_string(),
+                "alarm.message".to_string(),
+            ],
+        );
+
+        let (bitset, values) = encode_nt_payload_delta(&p1, &p2, &desc, false)
+            .expect("delta must produce a frame when a leaf changed");
+
+        // Only one leaf bit set (severity). Bit layout for filtered_desc:
+        //   bit 0 = root, bit 1 = alarm struct, bit 2 = severity,
+        //   bit 3 = status, bit 4 = message.
+        // => 5 bits → 1-byte bitset payload. The first byte is the size
+        // prefix (1), followed by the bitset byte.
+        assert_eq!(bitset[0], 1u8, "size prefix");
+        let b0 = bitset[1];
+        assert_eq!(b0 & 0x01, 0, "root bit must be clear");
+        assert_eq!(b0 & 0x02, 0, "alarm struct bit must be clear");
+        assert_eq!(b0 & 0x04, 0x04, "severity bit must be set");
+        assert_eq!(b0 & 0x08, 0, "status bit must be clear");
+        assert_eq!(b0 & 0x10, 0, "message bit must be clear");
+
+        // values should contain exactly one i32 (4 bytes).
+        assert_eq!(values.len(), 4);
+
+        // Round-trip through the decoder and check severity.
+        let decoder = PvdDecoder::new(false);
+        let mut body = bitset.clone();
+        body.extend_from_slice(&values);
+        let (decoded, _) = decoder
+            .decode_structure_with_bitset(&body, &desc)
+            .expect("decode delta");
+        let DecodedValue::Structure(fields) = decoded else {
+            panic!("expected struct")
+        };
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].0, "alarm");
+        match &fields[0].1 {
+            DecodedValue::Structure(inner) => {
+                assert_eq!(inner.len(), 1);
+                assert_eq!(inner[0].0, "severity");
+                assert!(matches!(inner[0].1, DecodedValue::Int32(2)));
+            }
+            other => panic!("expected struct got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn decoded_values_equal_treats_nan_as_equal() {
+        let a = DecodedValue::Float64(f64::NAN);
+        let b = DecodedValue::Float64(f64::NAN);
+        assert!(decoded_values_equal(&a, &b));
+        let c = DecodedValue::Float32(f32::NAN);
+        let d = DecodedValue::Float32(f32::NAN);
+        assert!(decoded_values_equal(&c, &d));
+        // But different concrete values are still different.
+        assert!(!decoded_values_equal(
+            &DecodedValue::Float64(1.0),
+            &DecodedValue::Float64(2.0)
+        ));
     }
 }

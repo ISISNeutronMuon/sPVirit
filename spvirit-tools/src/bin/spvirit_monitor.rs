@@ -9,6 +9,7 @@ use tokio::time::interval;
 
 use spvirit_client::client_from_opts;
 use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
+use spvirit_codec::spvd_encode::encode_pv_request;
 use spvirit_codec::spvirit_encode::encode_control_message;
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
 use spvirit_tools::spvirit_client::client::{
@@ -20,7 +21,11 @@ use spvirit_tools::spvirit_client::transport::{read_packet, read_until};
 use spvirit_tools::spvirit_client::types::{PvGetError, PvGetOptions};
 
 /// High-level monitor path (no raw hex output).
-async fn pvmonitor_high_level(opts: PvGetOptions, json: bool) -> Result<(), PvGetError> {
+async fn pvmonitor_high_level(
+    opts: PvGetOptions,
+    json: bool,
+    fields: Vec<String>,
+) -> Result<(), PvGetError> {
     let client = client_from_opts(&opts);
 
     let pv_name = opts.pv_name.clone();
@@ -29,16 +34,24 @@ async fn pvmonitor_high_level(opts: PvGetOptions, json: bool) -> Result<(), PvGe
         render_opts.format = OutputFormat::Json;
     }
 
-    client
-        .pvmonitor(&pv_name, |value| {
-            println!("{}", format_output(&pv_name, value, &render_opts));
-            ControlFlow::Continue(())
-        })
-        .await
+    let cb = |value: &spvirit_codec::spvd_decode::DecodedValue| {
+        println!("{}", format_output(&pv_name, value, &render_opts));
+        ControlFlow::Continue(())
+    };
+    if fields.is_empty() {
+        client.pvmonitor(&opts.pv_name, cb).await
+    } else {
+        let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
+        client.pvmonitor_fields(&opts.pv_name, &refs, cb).await
+    }
 }
 
 /// Low-level monitor path with raw hex output support.
-async fn pvmonitor_raw(opts: PvGetOptions, json: bool) -> Result<(), PvGetError> {
+async fn pvmonitor_raw(
+    opts: PvGetOptions,
+    json: bool,
+    fields: Vec<String>,
+) -> Result<(), PvGetError> {
     let target = resolve_pv_server(&opts).await?;
 
     let conn = establish_channel(target, &opts).await?;
@@ -51,11 +64,17 @@ async fn pvmonitor_raw(opts: PvGetOptions, json: bool) -> Result<(), PvGetError>
     } = conn;
 
     let ioid = 1u32;
+    let pv_request: Vec<u8> = if fields.is_empty() {
+        vec![0xfd, 0x02, 0x00, 0x80, 0x00, 0x00]
+    } else {
+        let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
+        encode_pv_request(&refs, is_be)
+    };
     let mon_init = encode_monitor_request(
         sid,
         ioid,
         0x08,
-        &[0xfd, 0x02, 0x00, 0x80, 0x00, 0x00],
+        &pv_request,
         version,
         is_be,
     );
@@ -131,11 +150,16 @@ async fn pvmonitor_raw(opts: PvGetOptions, json: bool) -> Result<(), PvGetError>
     }
 }
 
-async fn pvmonitor(opts: PvGetOptions, raw: bool, json: bool) -> Result<(), PvGetError> {
+async fn pvmonitor(
+    opts: PvGetOptions,
+    raw: bool,
+    json: bool,
+    fields: Vec<String>,
+) -> Result<(), PvGetError> {
     if raw {
-        pvmonitor_raw(opts, json).await
+        pvmonitor_raw(opts, json, fields).await
     } else {
-        pvmonitor_high_level(opts, json).await
+        pvmonitor_high_level(opts, json, fields).await
     }
 }
 
@@ -165,6 +189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
+    let fields = common.fields_list();
     let base_opts = common.into_pv_get_options(String::new())?;
 
     let rt = Runtime::new()?;
@@ -175,8 +200,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             opts.pv_name = pv.clone();
 
             let pv_label = pv;
+            let fields = fields.clone();
             set.spawn(async move {
-                let res = pvmonitor(opts, raw, json).await;
+                let res = pvmonitor(opts, raw, json, fields).await;
                 (pv_label, res)
             });
         }

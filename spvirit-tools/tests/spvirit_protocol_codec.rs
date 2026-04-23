@@ -183,3 +183,138 @@ fn golden_spec_vectors_decode() {
         assert!(decoded.is_some(), "vector {} failed to decode", name);
     }
 }
+
+// ─── Wire format locks: nested pvRequest + filtered/delta MONITOR frames ─────
+
+#[test]
+fn pv_request_nested_roundtrip_locks_wire_format() {
+    use spvirit_codec::spvd_encode::{decode_pv_request_fields, encode_pv_request};
+
+    // Empty request → decodes to None (all fields).
+    let empty = encode_pv_request(&[], false);
+    assert!(decode_pv_request_fields(&empty, false).is_none());
+
+    // Flat top-level field.
+    let flat = encode_pv_request(&["value"], false);
+    let paths = decode_pv_request_fields(&flat, false).expect("flat paths");
+    assert_eq!(paths, vec!["value".to_string()]);
+
+    // Nested dotted path → round-trips to the same dotted path.
+    let nested = encode_pv_request(&["alarm.severity"], false);
+    let paths = decode_pv_request_fields(&nested, false).expect("nested paths");
+    assert_eq!(paths, vec!["alarm.severity".to_string()]);
+
+    // Multiple, mixed nesting.
+    let mixed = encode_pv_request(&["value", "alarm.severity", "timeStamp"], false);
+    let paths = decode_pv_request_fields(&mixed, false).expect("mixed paths");
+    assert_eq!(
+        paths,
+        vec![
+            "value".to_string(),
+            "alarm.severity".to_string(),
+            "timeStamp".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn encode_nt_payload_filtered_locks_bitset_and_projection() {
+    use spvirit_codec::spvd_decode::{DecodedValue, PvdDecoder};
+    use spvirit_codec::spvd_encode::{
+        encode_nt_payload_filtered, encode_structure_desc, filter_structure_desc, nt_payload_desc,
+    };
+    use spvirit_types::{NtPayload, NtScalar, ScalarValue};
+
+    let mut nt = NtScalar::from_value(ScalarValue::F64(1.25));
+    nt.alarm_severity = 2;
+    let payload = NtPayload::Scalar(nt);
+
+    let full_desc = nt_payload_desc(&payload);
+    let desc = filter_structure_desc(&full_desc, &["alarm.severity".to_string()]);
+
+    // Top level has exactly one field: `alarm`.
+    assert_eq!(desc.fields.len(), 1);
+    assert_eq!(desc.fields[0].name, "alarm");
+
+    let (bitset, values) = encode_nt_payload_filtered(&payload, &desc, false);
+
+    // Bitset non-empty; bit 0 (whole-struct) set for initial full-projection
+    // frame. Lock that bit 0 of the first byte is 1.
+    assert!(!bitset.is_empty(), "bitset must be present");
+    // Bitset format is size-prefixed; locate the first data byte.
+    // size-prefix is 1 byte (PVA size<255); data follows.
+    assert!(bitset[0] > 0, "bitset size byte non-zero");
+    let data_byte = bitset[1];
+    assert_eq!(data_byte & 0x01, 0x01, "bit 0 (whole-struct) must be set");
+
+    // Values decode cleanly against the filtered descriptor and expose
+    // exactly `{alarm: {severity}}`.
+    let desc_bytes = encode_structure_desc(&desc, false);
+    let mut pvd = Vec::with_capacity(1 + desc_bytes.len() + values.len());
+    pvd.push(0x80);
+    pvd.extend_from_slice(&desc_bytes);
+    pvd.extend_from_slice(&values);
+    let decoder = PvdDecoder::new(false);
+    let parsed = decoder.parse_introspection(&pvd).expect("desc parse");
+    let (decoded, _consumed) = decoder
+        .decode_structure(&pvd[1 + desc_bytes.len()..], &parsed)
+        .expect("value decode");
+
+    let DecodedValue::Structure(top) = decoded else {
+        panic!("expected top-level struct");
+    };
+    assert_eq!(top.len(), 1);
+    assert_eq!(top[0].0, "alarm");
+    let DecodedValue::Structure(ref alarm) = top[0].1 else {
+        panic!("alarm must be a struct");
+    };
+    assert_eq!(alarm.len(), 1);
+    assert_eq!(alarm[0].0, "severity");
+}
+
+#[test]
+fn encode_nt_payload_delta_is_none_when_filtered_view_unchanged() {
+    use spvirit_codec::spvd_encode::{
+        encode_nt_payload_delta, filter_structure_desc, nt_payload_desc,
+    };
+    use spvirit_types::{NtPayload, NtScalar, ScalarValue};
+
+    let mut a = NtScalar::from_value(ScalarValue::F64(1.0));
+    a.alarm_severity = 0;
+    let mut b = NtScalar::from_value(ScalarValue::F64(2.0)); // value changed
+    b.alarm_severity = 0; // but severity unchanged
+    let pa = NtPayload::Scalar(a);
+    let pb = NtPayload::Scalar(b);
+
+    let full_desc = nt_payload_desc(&pa);
+    let desc = filter_structure_desc(&full_desc, &["alarm.severity".to_string()]);
+
+    let delta = encode_nt_payload_delta(&pa, &pb, &desc, false);
+    assert!(
+        delta.is_none(),
+        "delta must be None when selected fields unchanged"
+    );
+}
+
+#[test]
+fn encode_nt_payload_delta_emits_bytes_when_selected_field_changes() {
+    use spvirit_codec::spvd_encode::{
+        encode_nt_payload_delta, filter_structure_desc, nt_payload_desc,
+    };
+    use spvirit_types::{NtPayload, NtScalar, ScalarValue};
+
+    let mut a = NtScalar::from_value(ScalarValue::F64(1.0));
+    a.alarm_severity = 0;
+    let mut b = NtScalar::from_value(ScalarValue::F64(1.0));
+    b.alarm_severity = 2;
+    let pa = NtPayload::Scalar(a);
+    let pb = NtPayload::Scalar(b);
+
+    let full_desc = nt_payload_desc(&pa);
+    let desc = filter_structure_desc(&full_desc, &["alarm.severity".to_string()]);
+
+    let (bitset, values) =
+        encode_nt_payload_delta(&pa, &pb, &desc, false).expect("delta expected on change");
+    assert!(!bitset.is_empty());
+    assert!(!values.is_empty(), "changed severity must emit bytes");
+}

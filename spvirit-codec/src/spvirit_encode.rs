@@ -2,9 +2,9 @@
 
 use crate::spvd_decode::StructureDesc;
 use crate::spvd_encode::{
-    encode_nt_payload_bitset, encode_nt_payload_bitset_parts, encode_nt_payload_filtered,
-    encode_nt_payload_full, encode_nt_scalar_bitset, encode_nt_scalar_full, encode_structure_desc,
-    nt_payload_desc,
+    encode_nt_payload_bitset, encode_nt_payload_bitset_parts, encode_nt_payload_delta,
+    encode_nt_payload_filtered, encode_nt_payload_full, encode_nt_scalar_bitset,
+    encode_nt_scalar_full, encode_structure_desc, nt_payload_desc,
 };
 use spvirit_types::{NtPayload, NtScalar};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -879,6 +879,39 @@ pub fn encode_monitor_data_response_filtered(
     let mut out = encode_header(true, is_be, false, version, 13, payload.len() as u32);
     out.extend_from_slice(&payload);
     out
+}
+
+/// Encode a sparse monitor-data response containing only fields that changed
+/// between `prev_value` and `next_value` (projected onto `filtered_desc`).
+/// Returns `None` when nothing changed — the caller should suppress the send
+/// entirely and NOT decrement any pipeline credit.
+pub fn encode_monitor_data_response_delta(
+    ioid: u32,
+    subcmd: u8,
+    prev_value: &NtPayload,
+    next_value: &NtPayload,
+    filtered_desc: &StructureDesc,
+    version: u8,
+    is_be: bool,
+) -> Option<Vec<u8>> {
+    let (bitset, values) =
+        encode_nt_payload_delta(prev_value, next_value, filtered_desc, is_be)?;
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&if is_be {
+        ioid.to_be_bytes()
+    } else {
+        ioid.to_le_bytes()
+    });
+    payload.push(subcmd);
+    if (subcmd & 0x10) != 0 {
+        payload.extend_from_slice(&encode_status_ok());
+    }
+    payload.extend_from_slice(&bitset);
+    payload.extend_from_slice(&values);
+    payload.extend_from_slice(&encode_size_pva(0, is_be));
+    let mut out = encode_header(true, is_be, false, version, 13, payload.len() as u32);
+    out.extend_from_slice(&payload);
+    Some(out)
 }
 
 pub fn encode_destroy_channel_response(sid: u32, cid: u32, version: u8, is_be: bool) -> Vec<u8> {

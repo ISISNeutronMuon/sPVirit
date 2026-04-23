@@ -2,7 +2,7 @@ use argparse::{ArgumentParser, Store, StoreTrue};
 use tokio::runtime::Runtime;
 
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
-use spvirit_tools::spvirit_client::client::pvget;
+use spvirit_tools::spvirit_client::client::{pvget, pvget_fields};
 use spvirit_tools::spvirit_client::format::{OutputFormat, RenderOptions, format_output};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,10 +25,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     common.init_tracing();
+    let fields = common.fields_list();
     let opts = common.into_pv_get_options(pv_name.clone())?;
 
     let rt = Runtime::new()?;
-    let result = rt.block_on(pvget(&opts))?;
+    let result = rt.block_on(async {
+        if fields.is_empty() {
+            pvget(&opts).await
+        } else {
+            let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
+            pvget_fields(&opts, &refs).await
+        }
+    })?;
 
     let mut render_opts = RenderOptions::default();
     if json {

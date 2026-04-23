@@ -44,6 +44,20 @@ fn alloc_ioid() -> u32 {
     NEXT_IOID.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Build the pvRequest body for a GET / PUT / MONITOR INIT.
+///
+/// Returns the canonical "all fields" pvRequest (`field()`) when `fields` is
+/// empty, otherwise delegates to [`encode_pv_request`] which supports dotted
+/// nested paths like `"alarm.severity"`.
+fn build_pv_request(fields: &[&str], is_be: bool) -> Vec<u8> {
+    if fields.is_empty() {
+        // Empty pvRequest \u2014 server returns full descriptor / all fields.
+        vec![0xfd, 0x02, 0x00, 0x80, 0x00, 0x00]
+    } else {
+        encode_pv_request(fields, is_be)
+    }
+}
+
 // ─── PvaClientBuilder ────────────────────────────────────────────────────────
 
 /// Builder for [`PvaClient`].
@@ -254,6 +268,21 @@ impl PvaClient {
     /// client.pvput("MY:PV", serde_json::json!({"value": 1.5})).await?;
     /// ```
     pub async fn pvput(&self, pv_name: &str, value: impl Into<Value>) -> Result<(), PvGetError> {
+        // Default: PUT only the `value` field (the universal PVA convention).
+        // Use [`pvput_fields`](Self::pvput_fields) for richer selections.
+        self.pvput_fields(pv_name, value, &["value"]).await
+    }
+
+    /// Write to a PV with explicit field selection (dotted paths).
+    ///
+    /// `fields` is forwarded as the PUT pvRequest. An empty slice is treated
+    /// as "all fields" (server returns full descriptor on INIT).
+    pub async fn pvput_fields(
+        &self,
+        pv_name: &str,
+        value: impl Into<Value>,
+        fields: &[&str],
+    ) -> Result<(), PvGetError> {
         let json_val = value.into();
         let ChannelConn {
             mut stream,
@@ -265,8 +294,8 @@ impl PvaClient {
 
         let ioid = alloc_ioid();
 
-        // PUT INIT — send pvRequest for "field(value)"
-        let pv_request = encode_pv_request(&["value"], is_be);
+        // PUT INIT — pvRequest from caller-supplied field paths.
+        let pv_request = build_pv_request(fields, is_be);
         let init = encode_put_request(sid, ioid, QOS_INIT, &pv_request, PVA_VERSION, is_be);
         stream.write_all(&init).await?;
 
@@ -304,6 +333,17 @@ impl PvaClient {
     /// handshake. The returned [`PvaChannel`] is ready for immediate
     /// [`put`](PvaChannel::put) calls.
     pub async fn open_put_channel(&self, pv_name: &str) -> Result<PvaChannel, PvGetError> {
+        self.open_put_channel_fields(pv_name, &["value"]).await
+    }
+
+    /// Open a persistent PUT channel with explicit field selection.
+    ///
+    /// An empty `fields` slice requests all fields from the server.
+    pub async fn open_put_channel_fields(
+        &self,
+        pv_name: &str,
+        fields: &[&str],
+    ) -> Result<PvaChannel, PvGetError> {
         let ChannelConn {
             mut stream,
             sid,
@@ -315,7 +355,7 @@ impl PvaClient {
         let ioid = alloc_ioid();
 
         // PUT INIT
-        let pv_request = encode_pv_request(&["value"], is_be);
+        let pv_request = build_pv_request(fields, is_be);
         let init = encode_put_request(sid, ioid, QOS_INIT, &pv_request, PVA_VERSION, is_be);
         stream.write_all(&init).await?;
 
@@ -386,7 +426,26 @@ impl PvaClient {
     ///     ControlFlow::Continue(())
     /// }).await?;
     /// ```
-    pub async fn pvmonitor<F>(&self, pv_name: &str, mut callback: F) -> Result<(), PvGetError>
+    pub async fn pvmonitor<F>(&self, pv_name: &str, callback: F) -> Result<(), PvGetError>
+    where
+        F: FnMut(&DecodedValue) -> ControlFlow<()>,
+    {
+        // Default: subscribe to the entire structure. Use
+        // [`pvmonitor_fields`](Self::pvmonitor_fields) for filtered subscriptions.
+        self.pvmonitor_fields(pv_name, &[], callback).await
+    }
+
+    /// Subscribe to a PV with explicit field selection (dotted paths).
+    ///
+    /// `fields` is the MONITOR pvRequest. Each entry may be a top-level
+    /// field (`"value"`) or a dotted nested path (`"alarm.severity"`). An
+    /// empty slice requests all fields.
+    pub async fn pvmonitor_fields<F>(
+        &self,
+        pv_name: &str,
+        fields: &[&str],
+        mut callback: F,
+    ) -> Result<(), PvGetError>
     where
         F: FnMut(&DecodedValue) -> ControlFlow<()>,
     {
@@ -401,8 +460,8 @@ impl PvaClient {
         let ioid = alloc_ioid();
         let decoder = PvdDecoder::new(is_be);
 
-        // MONITOR INIT — request value + alarm + timeStamp
-        let pv_request = encode_pv_request(&["value", "alarm", "timeStamp"], is_be);
+        // MONITOR INIT — pvRequest from caller-supplied field paths.
+        let pv_request = build_pv_request(fields, is_be);
         let init = encode_monitor_request(sid, ioid, QOS_INIT, &pv_request, PVA_VERSION, is_be);
         stream.write_all(&init).await?;
 
@@ -619,13 +678,37 @@ pub async fn pvput(opts: &PvOptions, value: impl Into<Value>) -> Result<(), PvGe
 /// Subscribe to a PV and receive live updates (one-shot).
 ///
 /// The callback returns [`ControlFlow::Continue`] to keep listening or
-/// [`ControlFlow::Break`] to stop.
+/// [`ControlFlow::Break`] to stop. Subscribes to the full structure;
+/// see [`pvmonitor_fields`] for filtered subscriptions.
 pub async fn pvmonitor<F>(opts: &PvOptions, callback: F) -> Result<(), PvGetError>
 where
     F: FnMut(&DecodedValue) -> ControlFlow<()>,
 {
     let client = client_from_opts(opts);
     client.pvmonitor(&opts.pv_name, callback).await
+}
+
+/// Subscribe to a PV with explicit field selection (dotted paths).
+pub async fn pvmonitor_fields<F>(
+    opts: &PvOptions,
+    fields: &[&str],
+    callback: F,
+) -> Result<(), PvGetError>
+where
+    F: FnMut(&DecodedValue) -> ControlFlow<()>,
+{
+    let client = client_from_opts(opts);
+    client.pvmonitor_fields(&opts.pv_name, fields, callback).await
+}
+
+/// Write a value to a PV with explicit field selection (one-shot).
+pub async fn pvput_fields(
+    opts: &PvOptions,
+    value: impl Into<Value>,
+    fields: &[&str],
+) -> Result<(), PvGetError> {
+    let client = client_from_opts(opts);
+    client.pvput_fields(&opts.pv_name, value, fields).await
 }
 
 /// Retrieve the field/structure description for a PV (one-shot).
@@ -670,7 +753,7 @@ pub fn client_from_opts(opts: &PvOptions) -> PvaClient {
 }
 
 /// Decode an INIT response to extract the introspection StructureDesc.
-fn decode_init_introspection(raw: &[u8], label: &str) -> Result<StructureDesc, PvGetError> {
+pub fn decode_init_introspection(raw: &[u8], label: &str) -> Result<StructureDesc, PvGetError> {
     let mut pkt = PvaPacket::new(raw);
     let cmd = pkt
         .decode_payload()

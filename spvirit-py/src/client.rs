@@ -28,6 +28,17 @@ pub struct PyGetResult {
     pub raw_pvd: Vec<u8>,
 }
 
+impl PyGetResult {
+    pub(crate) fn new(pv_name: String, value: PyObject, raw_pva: Vec<u8>, raw_pvd: Vec<u8>) -> Self {
+        Self {
+            pv_name,
+            value,
+            raw_pva,
+            raw_pvd,
+        }
+    }
+}
+
 #[pymethods]
 impl PyGetResult {
     #[getter]
@@ -246,10 +257,29 @@ impl PyClient {
     }
 
     /// Fetch the current value of a PV (blocking).
-    fn get(&self, py: Python<'_>, pv_name: String) -> PyResult<PyGetResult> {
+    ///
+    /// If `fields` is provided, the pvRequest restricts the returned
+    /// structure to those dotted paths (e.g. `["value", "alarm.severity"]`).
+    #[pyo3(signature = (pv_name, fields=None))]
+    fn get(
+        &self,
+        py: Python<'_>,
+        pv_name: String,
+        fields: Option<Vec<String>>,
+    ) -> PyResult<PyGetResult> {
         let client = self.inner.clone();
         let result = py
-            .allow_threads(|| RUNTIME.block_on(client.pvget(&pv_name)))
+            .allow_threads(|| {
+                RUNTIME.block_on(async {
+                    match fields {
+                        None => client.pvget(&pv_name).await,
+                        Some(ref f) => {
+                            let refs: Vec<&str> = f.iter().map(String::as_str).collect();
+                            client.pvget_fields(&pv_name, &refs).await
+                        }
+                    }
+                })
+            })
             .map_err(to_py_err)?;
         let value = decoded_to_py(py, &result.value);
         Ok(PyGetResult {
@@ -261,29 +291,54 @@ impl PyClient {
     }
 
     /// Write a value to a PV (blocking).
-    fn put(&self, py: Python<'_>, pv_name: String, value: PyObject) -> PyResult<()> {
+    ///
+    /// `fields` selects which pvRequest fields are targeted. Defaults to
+    /// `["value"]` when omitted.
+    #[pyo3(signature = (pv_name, value, fields=None))]
+    fn put(
+        &self,
+        py: Python<'_>,
+        pv_name: String,
+        value: PyObject,
+        fields: Option<Vec<String>>,
+    ) -> PyResult<()> {
         let json_val = py_to_json(value.bind(py))?;
         let client = self.inner.clone();
-        py.allow_threads(|| RUNTIME.block_on(client.pvput(&pv_name, json_val)))
-            .map_err(to_py_err)
+        py.allow_threads(|| {
+            RUNTIME.block_on(async {
+                match fields {
+                    None => client.pvput(&pv_name, json_val).await,
+                    Some(ref f) => {
+                        let refs: Vec<&str> = f.iter().map(String::as_str).collect();
+                        client.pvput_fields(&pv_name, json_val, &refs).await
+                    }
+                }
+            })
+        })
+        .map_err(to_py_err)
     }
 
     /// Subscribe to a PV and call `callback(value_dict)` for each update.
     ///
     /// Blocks until the callback returns `False` or raises an exception.
+    /// `fields` restricts the subscription to the given dotted paths.
+    #[pyo3(signature = (pv_name, callback, fields=None))]
     fn monitor(
         &self,
         _py: Python<'_>,
         pv_name: String,
         callback: PyObject,
+        fields: Option<Vec<String>>,
     ) -> PyResult<()> {
         let client = self.inner.clone();
+        let fields = fields.unwrap_or_default();
         // We need the GIL inside the callback, so we cannot use allow_threads
         // for the entire operation. Instead we spawn on the runtime and
         // use Python::with_gil inside the callback.
         let result = RUNTIME.block_on(async {
+            let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
             client
-                .pvmonitor(&pv_name, |decoded| {
+                .pvmonitor_fields(&pv_name, &refs, |decoded| {
                     let keep_going = Python::with_gil(|py| {
                         let py_val = decoded_to_py(py, decoded);
                         match callback.call1(py, (py_val,)) {

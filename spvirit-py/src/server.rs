@@ -14,12 +14,15 @@ use spvirit_types::{ScalarArrayValue, ScalarValue};
 use crate::convert::{decoded_to_py, py_to_scalar, py_to_scalar_array, scalar_to_py};
 use crate::nt::{nt_payload_to_py, py_to_nt_payload};
 use crate::runtime::RUNTIME;
+use crate::source::{PyNotifier, PySourceAdapter};
 
 // ─── ServerBuilder ───────────────────────────────────────────────────────────
 
 #[pyclass(name = "ServerBuilder")]
 pub struct PyServerBuilder {
     builder: Option<spvirit_server::PvaServerBuilder>,
+    /// Python sources to wire up on build (label, order, adapter).
+    python_sources: Vec<(String, i32, Arc<PySourceAdapter>)>,
 }
 
 #[pymethods]
@@ -28,6 +31,7 @@ impl PyServerBuilder {
     fn new() -> Self {
         Self {
             builder: Some(PvaServer::builder()),
+            python_sources: Vec::new(),
         }
     }
 
@@ -264,17 +268,51 @@ impl PyServerBuilder {
         slf
     }
 
+    /// Register a Python-defined [`Source`].
+    ///
+    /// `source` is any Python object implementing `claim`, `get`, `put`,
+    /// `names`, and (optionally) `rpc` / `on_start`.  See the
+    /// `demo_source_*.py` examples for patterns.
+    ///
+    /// Lower `order` values are tried first during PV name resolution;
+    /// the built-in record store is always at order 0.
+    fn add_source(
+        mut slf: PyRefMut<'_, Self>,
+        label: String,
+        order: i32,
+        source: PyObject,
+    ) -> PyRefMut<'_, Self> {
+        let adapter = Arc::new(PySourceAdapter::new(source));
+        slf.python_sources.push((label.clone(), order, adapter.clone()));
+        let b = slf.builder.take().expect("builder consumed");
+        // Cast to Arc<dyn Source> via Arc<PySourceAdapter>.
+        let as_dyn: Arc<dyn spvirit_server::pvstore::Source> = adapter;
+        slf.builder = Some(b.source(label, order, as_dyn));
+        slf
+    }
+
     /// Build and return a `Server` that can be started.
     fn build(&mut self) -> PyResult<PyServer> {
         let b = self
             .builder
             .take()
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("builder already consumed"))?;
-        let server = b.build();
+        let mut server = b.build();
         let store = server.store().clone();
+        // Pre-create the monitor registry so Python sources can notify
+        // PVAccess monitor subscribers before .run() starts.
+        let registry = server.monitor_registry();
+        let notifier = PyNotifier::new(registry);
+        let sources = std::mem::take(&mut self.python_sources);
+        // Invoke `on_start(notifier)` on every Python source that defines it.
+        for (_, _, adapter) in &sources {
+            adapter.invoke_on_start(notifier.clone());
+        }
         Ok(PyServer {
             server: Some(server),
             store: Some(store),
+            notifier: Some(notifier),
+            post_build_sources: sources,
         })
     }
 }
@@ -285,6 +323,12 @@ impl PyServerBuilder {
 pub struct PyServer {
     server: Option<PvaServer>,
     store: Option<Arc<SimplePvStore>>,
+    /// Notifier handed to each Python source so it can publish monitor updates.
+    notifier: Option<PyNotifier>,
+    /// Adapters for all Python sources registered on this server — kept alive
+    /// so they outlive `run()`.
+    #[allow(dead_code)]
+    post_build_sources: Vec<(String, i32, Arc<PySourceAdapter>)>,
 }
 
 #[pymethods]
@@ -297,6 +341,34 @@ impl PyServer {
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("server already consumed"))?
             .clone();
         Ok(PyStore { inner: store })
+    }
+
+    /// Return the monitor notifier for publishing updates from Python code.
+    fn notifier(&self) -> PyResult<PyNotifier> {
+        self.notifier
+            .clone()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("server already consumed"))
+    }
+
+    /// Register an additional Python source after build.  The source's
+    /// `on_start(notifier)` (if defined) is invoked immediately.
+    fn add_source(
+        &mut self,
+        label: String,
+        order: i32,
+        source: PyObject,
+    ) -> PyResult<()> {
+        let server = self.server.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("server already consumed")
+        })?;
+        let adapter = Arc::new(PySourceAdapter::new(source));
+        if let Some(notifier) = self.notifier.clone() {
+            adapter.invoke_on_start(notifier);
+        }
+        let as_dyn: Arc<dyn spvirit_server::pvstore::Source> = adapter.clone();
+        server.add_source(label.clone(), order, as_dyn);
+        self.post_build_sources.push((label, order, adapter));
+        Ok(())
     }
 
     /// Run the server (blocking). This does not return until the server stops.

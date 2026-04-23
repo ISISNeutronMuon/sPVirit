@@ -34,6 +34,9 @@ pub struct CommonClientArgs {
     pub no_broadcast: bool,
     pub authnz_user: String,
     pub authnz_host: String,
+    /// Comma-separated dotted field paths (e.g. "value,alarm.severity").
+    /// Empty means "all fields".
+    pub fields: String,
 }
 
 impl CommonClientArgs {
@@ -50,6 +53,7 @@ impl CommonClientArgs {
             no_broadcast: false,
             authnz_user: String::new(),
             authnz_host: String::new(),
+            fields: String::new(),
         }
     }
 
@@ -101,6 +105,11 @@ impl CommonClientArgs {
             Store,
             "AuthNZ host override (takes precedence over env)",
         );
+        ap.refer(&mut self.fields).add_option(
+            &["-F", "--fields"],
+            Store,
+            "Comma-separated dotted field paths to request (e.g. value,alarm.severity). Empty = all fields.",
+        );
     }
 
     /// Initialise the `tracing_subscriber` based on `--debug`.
@@ -151,4 +160,18 @@ impl CommonClientArgs {
 
         Ok(opts)
     }
+
+    /// Parsed `--fields` value as a list of dotted paths (read-only).
+    pub fn fields_list(&self) -> Vec<String> {
+        parse_fields_arg(&self.fields)
+    }
+}
+
+/// Parse the comma-separated `--fields` value into a list of dotted paths.
+/// Whitespace around each entry is trimmed; empty entries are dropped.
+pub fn parse_fields_arg(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }

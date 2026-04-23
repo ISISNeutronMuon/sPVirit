@@ -1517,6 +1517,7 @@ pub async fn handle_connection(
                                         pipeline_enabled,
                                         nfree,
                                         filtered_desc: conn_state.ioid_to_desc.get(&ioid).cloned(),
+                                        last_snapshot: None,
                                     });
                             }
                             info!(
