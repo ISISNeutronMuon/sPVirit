@@ -33,9 +33,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 use tokio::sync::mpsc;
 
-use spvirit_codec::spvd_decode::{
-    DecodedValue, FieldDesc, FieldType, StructureDesc, TypeCode,
-};
+use spvirit_codec::spvd_decode::{DecodedValue, FieldDesc, FieldType, StructureDesc, TypeCode};
 use spvirit_server::monitor::MonitorRegistry;
 use spvirit_server::pvstore::{PvInfo, Source};
 use spvirit_types::NtPayload;
@@ -134,11 +132,7 @@ impl PyPvInfo {
     /// like `"double"`, `"int"`, `"string"`, `"double[]"`, or `"any"`.
     #[new]
     #[pyo3(signature = (struct_id, fields, writable=false))]
-    fn new(
-        struct_id: String,
-        fields: &Bound<'_, PyDict>,
-        writable: bool,
-    ) -> PyResult<Self> {
+    fn new(struct_id: String, fields: &Bound<'_, PyDict>, writable: bool) -> PyResult<Self> {
         let desc = dict_to_structure_desc(Some(struct_id), fields)?;
         Ok(Self {
             inner: PvInfo {
@@ -222,11 +216,9 @@ fn py_to_pv_info(obj: &Bound<'_, PyAny>) -> PyResult<PvInfo> {
             Some(v) if !v.is_none() => v.extract()?,
             _ => false,
         };
-        let fields_obj = dict
-            .get_item("fields")?
-            .ok_or_else(|| {
-                pyo3::exceptions::PyValueError::new_err("PvInfo dict missing 'fields'")
-            })?;
+        let fields_obj = dict.get_item("fields")?.ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("PvInfo dict missing 'fields'")
+        })?;
         let fields = fields_obj.downcast::<PyDict>().map_err(|_| {
             pyo3::exceptions::PyTypeError::new_err("PvInfo 'fields' must be a dict")
         })?;
@@ -394,9 +386,7 @@ async fn call_py_await(
             // Phase 2: block on .result(). `result()` uses a threading
             // Condition that releases the GIL while waiting, letting the
             // asyncio thread acquire it to run the coroutine.
-            Python::with_gil(|py| -> PyResult<PyObject> {
-                Ok(fut.call_method0(py, "result")?)
-            })
+            Python::with_gil(|py| -> PyResult<PyObject> { Ok(fut.call_method0(py, "result")?) })
         }
     }
 }
@@ -517,9 +507,8 @@ impl Source for PySourceAdapter {
                     let mut out = Vec::with_capacity(d.len());
                     for (k, v) in d.iter() {
                         let key: String = k.extract().map_err(|e| format!("put dict key: {e}"))?;
-                        let payload = py_to_nt_payload(&v).map_err(|e| {
-                            format!("put dict value for '{key}': {e}")
-                        })?;
+                        let payload = py_to_nt_payload(&v)
+                            .map_err(|e| format!("put dict value for '{key}': {e}"))?;
                         out.push((key, payload));
                     }
                     return Ok(out);
@@ -534,8 +523,10 @@ impl Source for PySourceAdapter {
                         if t.len() != 2 {
                             return Err("put list tuple must have 2 elements".to_string());
                         }
-                        let key: String =
-                            t.get_item(0).and_then(|x| x.extract()).map_err(|e| format!("{e}"))?;
+                        let key: String = t
+                            .get_item(0)
+                            .and_then(|x| x.extract())
+                            .map_err(|e| format!("{e}"))?;
                         let payload = t
                             .get_item(1)
                             .map_err(|e| format!("{e}"))
@@ -546,7 +537,10 @@ impl Source for PySourceAdapter {
                 }
                 Err(format!(
                     "put() must return None, NtPayload, dict, or list of tuples; got {}",
-                    b.get_type().name().map(|n| n.to_string()).unwrap_or_default()
+                    b.get_type()
+                        .name()
+                        .map(|n| n.to_string())
+                        .unwrap_or_default()
                 ))
             })
         })
@@ -571,9 +565,7 @@ impl Source for PySourceAdapter {
         let args = args.clone();
         Box::pin(async move {
             // If the Python object doesn't define rpc, fall back to an error.
-            let has_rpc = Python::with_gil(|py| {
-                obj.bind(py).hasattr("rpc").unwrap_or(false)
-            });
+            let has_rpc = Python::with_gil(|py| obj.bind(py).hasattr("rpc").unwrap_or(false));
             if !has_rpc {
                 return Err("RPC not supported".to_string());
             }
@@ -581,10 +573,7 @@ impl Source for PySourceAdapter {
                 let args_py = decoded_to_py(py, &args);
                 PyTuple::new(
                     py,
-                    &[
-                        name.into_pyobject(py)?.into_any(),
-                        args_py.into_bound(py),
-                    ],
+                    &[name.into_pyobject(py)?.into_any(), args_py.into_bound(py)],
                 )
             })
             .await
@@ -595,9 +584,7 @@ impl Source for PySourceAdapter {
         })
     }
 
-    fn names<'a>(
-        &'a self,
-    ) -> Pin<Box<dyn Future<Output = Vec<String>> + Send + 'a>> {
+    fn names<'a>(&'a self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send + 'a>> {
         let obj = self.obj.clone();
         Box::pin(async move {
             // `names` may not be defined (we accept that too).

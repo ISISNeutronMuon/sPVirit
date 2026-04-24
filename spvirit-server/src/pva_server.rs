@@ -22,7 +22,10 @@ use std::time::Duration;
 use regex::Regex;
 use tracing::info;
 
-use spvirit_types::{NtEnum, NtScalar, NtScalarArray, NtTable as NtTableType, NtTableColumn, NtNdArray as NtNdArrayType, NdCodec, NdDimension, NtTimeStamp, PvValue, ScalarArrayValue, ScalarValue};
+use spvirit_types::{
+    NdCodec, NdDimension, NtEnum, NtNdArray as NtNdArrayType, NtScalar, NtScalarArray,
+    NtTable as NtTableType, NtTableColumn, NtTimeStamp, PvValue, ScalarArrayValue, ScalarValue,
+};
 
 use crate::db::{load_db, parse_db};
 use crate::handler::PvListMode;
@@ -314,8 +317,7 @@ impl PvaServerBuilder {
                 reverse: false,
             })
             .collect();
-        let uncompressed_size =
-            (data.len() * data.element_size_bytes().max(1)) as i64;
+        let uncompressed_size = (data.len() * data.element_size_bytes().max(1)) as i64;
         self.records.insert(
             name.clone(),
             RecordInstance {
@@ -355,12 +357,7 @@ impl PvaServerBuilder {
     }
 
     /// Add an `mbbi` (multi-bit binary input, read-only) NTEnum record.
-    pub fn mbbi(
-        mut self,
-        name: impl Into<String>,
-        choices: Vec<String>,
-        initial: i32,
-    ) -> Self {
+    pub fn mbbi(mut self, name: impl Into<String>, choices: Vec<String>, initial: i32) -> Self {
         let name = name.into();
         self.records.insert(
             name.clone(),
@@ -381,12 +378,7 @@ impl PvaServerBuilder {
     }
 
     /// Add an `mbbo` (multi-bit binary output, writable) NTEnum record.
-    pub fn mbbo(
-        mut self,
-        name: impl Into<String>,
-        choices: Vec<String>,
-        initial: i32,
-    ) -> Self {
+    pub fn mbbo(mut self, name: impl Into<String>, choices: Vec<String>, initial: i32) -> Self {
         let name = name.into();
         self.records.insert(
             name.clone(),
@@ -518,12 +510,7 @@ impl PvaServerBuilder {
     /// ```rust,ignore
     /// .source("hardware", -10, Arc::new(HardwareSource::new()))
     /// ```
-    pub fn source(
-        mut self,
-        label: impl Into<String>,
-        order: i32,
-        source: Arc<dyn Source>,
-    ) -> Self {
+    pub fn source(mut self, label: impl Into<String>, order: i32, source: Arc<dyn Source>) -> Self {
         self.extra_sources.push((label.into(), order, source));
         self
     }
@@ -675,12 +662,7 @@ impl PvaServer {
     /// server.add_source("agg", 10, Arc::new(MyAggSource::new(store)));
     /// server.run().await?;
     /// ```
-    pub fn add_source(
-        &mut self,
-        label: impl Into<String>,
-        order: i32,
-        source: Arc<dyn Source>,
-    ) {
+    pub fn add_source(&mut self, label: impl Into<String>, order: i32, source: Arc<dyn Source>) {
         self.extra_sources.push((label.into(), order, source));
     }
 

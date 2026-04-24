@@ -21,8 +21,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use spvirit_codec::spvd_decode::{DecodedValue, FieldDesc, FieldType, StructureDesc, TypeCode};
-use spvirit_server::pvstore::{PvInfo, Source};
 use spvirit_server::PvaServer;
+use spvirit_server::pvstore::{PvInfo, Source};
 use spvirit_types::{NtPayload, NtScalar, ScalarValue};
 use tokio::sync::mpsc;
 
@@ -45,14 +45,17 @@ fn f64_scalar_desc() -> StructureDesc {
 fn extract_f64(args: &DecodedValue, field: &str) -> Option<f64> {
     match args {
         DecodedValue::Structure(fields) => {
-            fields.iter().find(|(k, _)| k == field).and_then(|(_, v)| match v {
-                DecodedValue::Float64(f) => Some(*f),
-                DecodedValue::Float32(f) => Some(*f as f64),
-                DecodedValue::Int32(i) => Some(*i as f64),
-                DecodedValue::Int64(i) => Some(*i as f64),
-                DecodedValue::UInt32(i) => Some(*i as f64),
-                _ => None,
-            })
+            fields
+                .iter()
+                .find(|(k, _)| k == field)
+                .and_then(|(_, v)| match v {
+                    DecodedValue::Float64(f) => Some(*f),
+                    DecodedValue::Float32(f) => Some(*f as f64),
+                    DecodedValue::Int32(i) => Some(*i as f64),
+                    DecodedValue::Int64(i) => Some(*i as f64),
+                    DecodedValue::UInt32(i) => Some(*i as f64),
+                    _ => None,
+                })
         }
         _ => None,
     }
@@ -109,7 +112,9 @@ impl Source for RpcAddSource {
             let sum = a + b;
             println!("[rpc] {a} + {b} = {sum}");
 
-            Ok(NtPayload::Scalar(NtScalar::from_value(ScalarValue::F64(sum))))
+            Ok(NtPayload::Scalar(NtScalar::from_value(ScalarValue::F64(
+                sum,
+            ))))
         })
     }
 

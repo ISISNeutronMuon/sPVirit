@@ -417,7 +417,10 @@ impl PvdDecoder {
             if let Some(ft) = self.registry.borrow().get(&key) {
                 return Some((ft.clone(), 3));
             }
-            debug!("Type descriptor ONLY_ID (0xFE) key={} not found in registry", key);
+            debug!(
+                "Type descriptor ONLY_ID (0xFE) key={} not found in registry",
+                key
+            );
             return None;
         }
 
@@ -578,15 +581,13 @@ impl PvdDecoder {
             if let Some((desc, consumed)) = self.parse_introspection_with_len(&data[3..]) {
                 // Register this structure type for later 0xFE references
                 if !desc.fields.is_empty() {
-                    self.registry.borrow_mut().insert(
-                        key,
-                        FieldType::Structure(desc.clone()),
-                    );
+                    self.registry
+                        .borrow_mut()
+                        .insert(key, FieldType::Structure(desc.clone()));
                 } else {
-                    self.registry.borrow_mut().insert(
-                        key,
-                        FieldType::Structure(desc.clone()),
-                    );
+                    self.registry
+                        .borrow_mut()
+                        .insert(key, FieldType::Structure(desc.clone()));
                 }
                 return Some((desc, 3 + consumed));
             }
@@ -609,7 +610,10 @@ impl PvdDecoder {
                     return Some((desc.clone(), 3));
                 }
             }
-            debug!("Introspection ONLY_ID (0xFE) key={} not found in registry", key);
+            debug!(
+                "Introspection ONLY_ID (0xFE) key={} not found in registry",
+                key
+            );
             return None;
         }
 

@@ -114,7 +114,9 @@ impl Source for AggregateSource {
         let name = name.to_string();
         Box::pin(async move {
             let val = self.compute(&name).await?;
-            Some(NtPayload::Scalar(NtScalar::from_value(ScalarValue::F64(val))))
+            Some(NtPayload::Scalar(NtScalar::from_value(ScalarValue::F64(
+                val,
+            ))))
         })
     }
 

@@ -139,7 +139,10 @@ impl SourceRegistry {
     /// Lower `order` values are queried first.
     pub async fn add(&self, label: impl Into<String>, order: i32, source: Arc<dyn Source>) {
         let label = label.into();
-        debug!("SourceRegistry: adding source '{}' at order {}", label, order);
+        debug!(
+            "SourceRegistry: adding source '{}' at order {}",
+            label, order
+        );
         let mut sources = self.sources.write().await;
         sources.push(SourceEntry {
             label,

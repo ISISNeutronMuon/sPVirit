@@ -1,15 +1,15 @@
 use std::ops::ControlFlow;
 use std::time::Duration;
 
-use argparse::{ArgumentParser, List, StoreTrue};
+use argparse::{ArgumentParser, List, Store, StoreTrue};
 use hex::encode as hex_encode;
 use tokio::io::AsyncWriteExt;
 use tokio::runtime::Runtime;
 use tokio::time::interval;
 
-use spvirit_client::client_from_opts;
+use spvirit_client::{MonitorOptions, client_from_opts};
 use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
-use spvirit_codec::spvd_encode::encode_pv_request;
+use spvirit_codec::spvd_encode::{encode_pv_request, encode_pv_request_with_options};
 use spvirit_codec::spvirit_encode::encode_control_message;
 use spvirit_tools::spvirit_client::cli::CommonClientArgs;
 use spvirit_tools::spvirit_client::client::{
@@ -25,6 +25,7 @@ async fn pvmonitor_high_level(
     opts: PvGetOptions,
     json: bool,
     fields: Vec<String>,
+    pipeline: Option<u32>,
 ) -> Result<(), PvGetError> {
     let client = client_from_opts(&opts);
 
@@ -38,10 +39,14 @@ async fn pvmonitor_high_level(
         println!("{}", format_output(&pv_name, value, &render_opts));
         ControlFlow::Continue(())
     };
-    if fields.is_empty() {
+    let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
+    if let Some(q) = pipeline {
+        client
+            .pvmonitor_with_options(&opts.pv_name, &refs, MonitorOptions::pipelined(q), cb)
+            .await
+    } else if fields.is_empty() {
         client.pvmonitor(&opts.pv_name, cb).await
     } else {
-        let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
         client.pvmonitor_fields(&opts.pv_name, &refs, cb).await
     }
 }
@@ -51,6 +56,7 @@ async fn pvmonitor_raw(
     opts: PvGetOptions,
     json: bool,
     fields: Vec<String>,
+    pipeline: Option<u32>,
 ) -> Result<(), PvGetError> {
     let target = resolve_pv_server(&opts).await?;
 
@@ -64,20 +70,27 @@ async fn pvmonitor_raw(
     } = conn;
 
     let ioid = 1u32;
-    let pv_request: Vec<u8> = if fields.is_empty() {
-        vec![0xfd, 0x02, 0x00, 0x80, 0x00, 0x00]
+    let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
+    let (pv_request, init_subcmd, start_subcmd) = if let Some(q) = pipeline {
+        let qs_str = q.to_string();
+        let mut body = encode_pv_request_with_options(
+            &refs,
+            &[("pipeline", "true"), ("queueSize", qs_str.as_str())],
+            is_be,
+        );
+        let qs_bytes = if is_be {
+            q.to_be_bytes()
+        } else {
+            q.to_le_bytes()
+        };
+        body.extend_from_slice(&qs_bytes);
+        (body, 0x08u8 | 0x80, 0x44u8 | 0x80)
+    } else if fields.is_empty() {
+        (vec![0xfd, 0x02, 0x00, 0x80, 0x00, 0x00], 0x08u8, 0x44u8)
     } else {
-        let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
-        encode_pv_request(&refs, is_be)
+        (encode_pv_request(&refs, is_be), 0x08u8, 0x44u8)
     };
-    let mon_init = encode_monitor_request(
-        sid,
-        ioid,
-        0x08,
-        &pv_request,
-        version,
-        is_be,
-    );
+    let mon_init = encode_monitor_request(sid, ioid, init_subcmd, &pv_request, version, is_be);
     stream.write_all(&mon_init).await?;
 
     let init_resp = read_until(&mut stream, opts.timeout, |cmd| {
@@ -100,11 +113,13 @@ async fn pvmonitor_raw(
         }
     };
 
-    let mon_start = encode_monitor_request(sid, ioid, 0x44, &[], version, is_be);
+    let mon_start = encode_monitor_request(sid, ioid, start_subcmd, &[], version, is_be);
     stream.write_all(&mon_start).await?;
 
     let mut echo_interval = interval(Duration::from_secs(10));
     let mut echo_token: u32 = 1;
+    let mut consumed_since_ack: u32 = 0;
+    let ack_threshold: u32 = pipeline.map(|q| (q / 2).max(1)).unwrap_or(0);
 
     loop {
         tokio::select! {
@@ -139,6 +154,21 @@ async fn pvmonitor_raw(
                             println!("raw_pva: {}", hex_encode(&bytes));
                             println!("raw_pvd: {}", hex_encode(&op.body));
                         }
+                        if pipeline.is_some() && op.subcmd == 0x00 {
+                            consumed_since_ack = consumed_since_ack.saturating_add(1);
+                            if consumed_since_ack >= ack_threshold {
+                                let ack_bytes = if is_be {
+                                    consumed_since_ack.to_be_bytes()
+                                } else {
+                                    consumed_since_ack.to_le_bytes()
+                                };
+                                let ack = encode_monitor_request(
+                                    sid, ioid, 0x80, &ack_bytes, version, is_be,
+                                );
+                                let _ = stream.write_all(&ack).await;
+                                consumed_since_ack = 0;
+                            }
+                        }
                         if op.subcmd == 0x10 {
                             return Ok(());
                         }
@@ -155,11 +185,12 @@ async fn pvmonitor(
     raw: bool,
     json: bool,
     fields: Vec<String>,
+    pipeline: Option<u32>,
 ) -> Result<(), PvGetError> {
     if raw {
-        pvmonitor_raw(opts, json, fields).await
+        pvmonitor_raw(opts, json, fields, pipeline).await
     } else {
-        pvmonitor_high_level(opts, json, fields).await
+        pvmonitor_high_level(opts, json, fields, pipeline).await
     }
 }
 
@@ -167,6 +198,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut pv_names: Vec<String> = Vec::new();
     let mut raw = false;
     let mut json = false;
+    let mut pipeline_queue: u32 = 0;
     let mut common = CommonClientArgs::new();
 
     {
@@ -179,8 +211,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .add_option(&["--raw"], StoreTrue, "Print raw hex payload");
         ap.refer(&mut json)
             .add_option(&["--json"], StoreTrue, "Print JSON output");
+        ap.refer(&mut pipeline_queue).add_option(
+            &["--pipeline"],
+            Store,
+            "Enable monitor pipelining with the given queueSize (0 = off)",
+        );
         ap.parse_args_or_exit();
     }
+    let pipeline: Option<u32> = if pipeline_queue > 0 {
+        Some(pipeline_queue)
+    } else {
+        None
+    };
 
     common.init_tracing();
 
@@ -202,7 +244,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let pv_label = pv;
             let fields = fields.clone();
             set.spawn(async move {
-                let res = pvmonitor(opts, raw, json, fields).await;
+                let res = pvmonitor(opts, raw, json, fields, pipeline).await;
                 (pv_label, res)
             });
         }

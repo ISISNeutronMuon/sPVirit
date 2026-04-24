@@ -1410,8 +1410,7 @@ impl PvaOpPayload {
         let mut status: Option<PvaStatus> = None;
         let mut pvd_raw: Vec<u8> = vec![];
 
-        let has_status = is_server
-            && ((subcmd & 0x08) != 0 || (command != 13 && command != 14));
+        let has_status = is_server && ((subcmd & 0x08) != 0 || (command != 13 && command != 14));
 
         if !body.is_empty() {
             if has_status {

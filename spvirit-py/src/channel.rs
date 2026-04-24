@@ -14,8 +14,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 use spvirit_client::client::{
-    ChannelConn, ensure_status_ok, establish_channel, encode_get_request, encode_monitor_request,
-    encode_put_request,
+    ChannelConn, encode_get_request, encode_monitor_request, encode_put_request, ensure_status_ok,
+    establish_channel,
 };
 use spvirit_client::pva_client::decode_init_introspection;
 use spvirit_client::transport::{read_packet, read_until};
@@ -114,7 +114,15 @@ async fn do_connect(
 async fn run_get(
     state: Arc<Mutex<ChannelState>>,
     fields: Vec<String>,
-) -> Result<(String, spvirit_codec::spvd_decode::DecodedValue, Vec<u8>, Vec<u8>), PvGetError> {
+) -> Result<
+    (
+        String,
+        spvirit_codec::spvd_decode::DecodedValue,
+        Vec<u8>,
+        Vec<u8>,
+    ),
+    PvGetError,
+> {
     let mut guard = state.lock().await;
     let timeout = guard.timeout;
     let ioid = guard.alloc_ioid();
@@ -158,7 +166,9 @@ async fn run_get(
                 .ok_or_else(|| PvGetError::Decode("no decoded value".to_string()))?;
             Ok((pv_name, value, data_resp, op.body))
         }
-        _ => Err(PvGetError::Protocol("unexpected get data response".to_string())),
+        _ => Err(PvGetError::Protocol(
+            "unexpected get data response".to_string(),
+        )),
     }
 }
 
@@ -406,12 +416,7 @@ impl PyChannel {
     /// `["value"]` when omitted. A single string is still accepted for
     /// backwards compatibility with earlier versions of this binding.
     #[pyo3(signature = (value, fields=None))]
-    fn put(
-        &self,
-        py: Python<'_>,
-        value: PyObject,
-        fields: Option<PyObject>,
-    ) -> PyResult<()> {
+    fn put(&self, py: Python<'_>, value: PyObject, fields: Option<PyObject>) -> PyResult<()> {
         let state = self.state.clone();
         let json = py_to_json(value.bind(py))?;
         let fields = normalize_fields(py, fields)?;
@@ -608,5 +613,3 @@ pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
         .set_item("spvirit.lowlevel", &m)?;
     Ok(())
 }
-
-

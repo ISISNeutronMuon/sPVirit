@@ -7,8 +7,8 @@ use std::time::Duration;
 use pyo3::prelude::*;
 
 use spvirit_codec::spvd_decode::DecodedValue;
-use spvirit_server::pva_server::PvaServer;
 use spvirit_server::SimplePvStore;
+use spvirit_server::pva_server::PvaServer;
 use spvirit_types::{ScalarArrayValue, ScalarValue};
 
 use crate::convert::{decoded_to_py, py_to_scalar, py_to_scalar_array, scalar_to_py};
@@ -65,27 +65,43 @@ impl PyServerBuilder {
         slf
     }
 
-    fn string_out(mut slf: PyRefMut<'_, Self>, name: String, initial: String) -> PyRefMut<'_, Self> {
+    fn string_out(
+        mut slf: PyRefMut<'_, Self>,
+        name: String,
+        initial: String,
+    ) -> PyRefMut<'_, Self> {
         let b = slf.builder.take().expect("builder consumed");
         slf.builder = Some(b.string_out(name, initial));
         slf
     }
 
-    fn waveform<'py>(mut slf: PyRefMut<'py, Self>, name: String, data: &Bound<'py, PyAny>) -> PyResult<PyRefMut<'py, Self>> {
+    fn waveform<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        name: String,
+        data: &Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
         let arr = py_to_scalar_array(data)?;
         let b = slf.builder.take().expect("builder consumed");
         slf.builder = Some(b.waveform(name, arr));
         Ok(slf)
     }
 
-    fn aai<'py>(mut slf: PyRefMut<'py, Self>, name: String, data: &Bound<'py, PyAny>) -> PyResult<PyRefMut<'py, Self>> {
+    fn aai<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        name: String,
+        data: &Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
         let arr = py_to_scalar_array(data)?;
         let b = slf.builder.take().expect("builder consumed");
         slf.builder = Some(b.aai(name, arr));
         Ok(slf)
     }
 
-    fn aao<'py>(mut slf: PyRefMut<'py, Self>, name: String, data: &Bound<'py, PyAny>) -> PyResult<PyRefMut<'py, Self>> {
+    fn aao<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        name: String,
+        data: &Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
         let arr = py_to_scalar_array(data)?;
         let b = slf.builder.take().expect("builder consumed");
         slf.builder = Some(b.aao(name, arr));
@@ -191,14 +207,16 @@ impl PyServerBuilder {
 
     fn on_put(mut slf: PyRefMut<'_, Self>, name: String, callback: PyObject) -> PyRefMut<'_, Self> {
         let b = slf.builder.take().expect("builder consumed");
-        slf.builder = Some(b.on_put(name, move |pv_name: &str, decoded: &DecodedValue| {
-            Python::with_gil(|py| {
-                let py_val = decoded_to_py(py, decoded);
-                if let Err(e) = callback.call1(py, (pv_name, py_val)) {
-                    tracing::error!("on_put callback error: {e}");
-                }
-            });
-        }));
+        slf.builder = Some(
+            b.on_put(name, move |pv_name: &str, decoded: &DecodedValue| {
+                Python::with_gil(|py| {
+                    let py_val = decoded_to_py(py, decoded);
+                    if let Err(e) = callback.call1(py, (pv_name, py_val)) {
+                        tracing::error!("on_put callback error: {e}");
+                    }
+                });
+            }),
+        );
         slf
     }
 
@@ -211,15 +229,11 @@ impl PyServerBuilder {
         let b = slf.builder.take().expect("builder consumed");
         let dur = Duration::from_secs_f64(period_secs);
         slf.builder = Some(b.scan(name, dur, move |pv_name: &str| {
-            Python::with_gil(|py| {
-                match callback.call1(py, (pv_name,)) {
-                    Ok(ret) => {
-                        py_to_scalar(ret.bind(py)).unwrap_or(ScalarValue::F64(0.0))
-                    }
-                    Err(e) => {
-                        tracing::error!("scan callback error: {e}");
-                        ScalarValue::F64(0.0)
-                    }
+            Python::with_gil(|py| match callback.call1(py, (pv_name,)) {
+                Ok(ret) => py_to_scalar(ret.bind(py)).unwrap_or(ScalarValue::F64(0.0)),
+                Err(e) => {
+                    tracing::error!("scan callback error: {e}");
+                    ScalarValue::F64(0.0)
                 }
             })
         }));
@@ -283,7 +297,8 @@ impl PyServerBuilder {
         source: PyObject,
     ) -> PyRefMut<'_, Self> {
         let adapter = Arc::new(PySourceAdapter::new(source));
-        slf.python_sources.push((label.clone(), order, adapter.clone()));
+        slf.python_sources
+            .push((label.clone(), order, adapter.clone()));
         let b = slf.builder.take().expect("builder consumed");
         // Cast to Arc<dyn Source> via Arc<PySourceAdapter>.
         let as_dyn: Arc<dyn spvirit_server::pvstore::Source> = adapter;
@@ -352,15 +367,11 @@ impl PyServer {
 
     /// Register an additional Python source after build.  The source's
     /// `on_start(notifier)` (if defined) is invoked immediately.
-    fn add_source(
-        &mut self,
-        label: String,
-        order: i32,
-        source: PyObject,
-    ) -> PyResult<()> {
-        let server = self.server.as_mut().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("server already consumed")
-        })?;
+    fn add_source(&mut self, label: String, order: i32, source: PyObject) -> PyResult<()> {
+        let server = self
+            .server
+            .as_mut()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("server already consumed"))?;
         let adapter = Arc::new(PySourceAdapter::new(source));
         if let Some(notifier) = self.notifier.clone() {
             adapter.invoke_on_start(notifier);

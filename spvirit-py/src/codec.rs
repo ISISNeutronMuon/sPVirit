@@ -7,13 +7,13 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
+use spvirit_client::put_encode::encode_put_payload as client_encode_put_payload;
 use spvirit_codec::epics_decode::PvaPacket;
 use spvirit_codec::spvd_decode::{
     DecodedValue, FieldDesc, FieldType, PvdDecoder, StructureDesc, TypeCode,
     extract_nt_scalar_value, format_compact_value,
 };
 use spvirit_codec::spvd_encode::encode_pv_request as codec_encode_pv_request;
-use spvirit_client::put_encode::encode_put_payload as client_encode_put_payload;
 
 use crate::convert::{decoded_to_py, py_to_json};
 use crate::errors::{decode_msg_to_py_err, protocol_msg_to_py_err};
@@ -154,10 +154,7 @@ impl PyStructureDesc {
 
     /// Look up a field by name, returning None when absent.
     fn field(&self, name: &str) -> Option<PyFieldDesc> {
-        self.inner
-            .field(name)
-            .cloned()
-            .map(PyFieldDesc::from_inner)
+        self.inner.field(name).cloned().map(PyFieldDesc::from_inner)
     }
 
     fn __len__(&self) -> usize {
@@ -245,8 +242,8 @@ pub fn encode_put_payload(
     is_be: bool,
 ) -> PyResult<PyObject> {
     let json = py_to_json(value.bind(py))?;
-    let bytes = client_encode_put_payload(desc.inner(), &json, is_be)
-        .map_err(protocol_msg_to_py_err)?;
+    let bytes =
+        client_encode_put_payload(desc.inner(), &json, is_be).map_err(protocol_msg_to_py_err)?;
     Ok(PyBytes::new(py, &bytes).into_any().unbind())
 }
 
@@ -299,10 +296,7 @@ pub fn decode_packet<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, P
     flags.set_item("is_msb", pkt.header.flags.is_msb)?;
     out.set_item("flags", flags)?;
 
-    out.set_item(
-        "payload",
-        PyBytes::new(py, &data[8.min(data.len())..]),
-    )?;
+    out.set_item("payload", PyBytes::new(py, &data[8.min(data.len())..]))?;
 
     let details = PyDict::new(py);
     if let Some(cmd) = pkt.decode_payload() {
@@ -367,10 +361,7 @@ pub(crate) fn fill_command_details(
                 details.set_item("status", s)?;
             }
             if let Some(intro) = &p.introspection {
-                details.set_item(
-                    "introspection",
-                    PyStructureDesc::from_inner(intro.clone()),
-                )?;
+                details.set_item("introspection", PyStructureDesc::from_inner(intro.clone()))?;
             }
         }
         C::CreateChannel(p) => {

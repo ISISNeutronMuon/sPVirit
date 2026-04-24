@@ -169,9 +169,10 @@ async fn lifecycle_put_without_init_returns_error() {
         .expect("put data without init");
     let cmd = scenario
         .session
-        .read_until(Duration::from_secs(2), |cmd| {
-            matches!(cmd, PvaPacketCommand::Op(op) if op.command == 11 && op.ioid == ioid)
-        })
+        .read_until(
+            Duration::from_secs(2),
+            |cmd| matches!(cmd, PvaPacketCommand::Op(op) if op.command == 11 && op.ioid == ioid),
+        )
         .await
         .expect("put error response");
 

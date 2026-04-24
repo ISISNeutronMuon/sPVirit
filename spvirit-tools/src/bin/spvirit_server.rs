@@ -24,9 +24,6 @@ use spvirit_codec::spvd_decode::{FieldDesc, FieldType, StructureDesc, TypeCode};
 use spvirit_codec::spvd_encode::{
     decode_pv_request_fields, encode_size_pvd, filter_structure_desc, nt_payload_desc,
 };
-use spvirit_codec::spvirit_encode::{
-    encode_monitor_data_response_delta, encode_monitor_data_response_filtered,
-};
 use spvirit_codec::spvirit_encode::encode_control_message;
 use spvirit_codec::spvirit_encode::{
     encode_beacon, encode_connection_validation, encode_create_channel_error,
@@ -38,6 +35,9 @@ use spvirit_codec::spvirit_encode::{
     encode_op_put_getput_response_payload, encode_op_put_response, encode_op_put_status_response,
     encode_op_rpc_data_response_payload, encode_op_status_error_response,
     encode_op_status_response, encode_search_response, ip_from_bytes, ip_to_bytes,
+};
+use spvirit_codec::spvirit_encode::{
+    encode_monitor_data_response_delta, encode_monitor_data_response_filtered,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -556,7 +556,8 @@ async fn handle_connection(
     send_msg(&state, conn_id, set_byte_order).await;
 
     // Server sends Connection Validation (cmd=1) next.
-    let server_validation = encode_connection_validation(16_384, 512, &["anonymous", "ca"], 2, false);
+    let server_validation =
+        encode_connection_validation(16_384, 512, &["anonymous", "ca"], 2, false);
     validate_encoded_packet(conn_id, "server_validation_init", &server_validation);
     dump_hex_packet(
         conn_id,
@@ -1103,8 +1104,7 @@ async fn handle_connection(
                                 continue;
                             };
                             let full_desc = nt_payload_desc(&nt);
-                            let pv_req_fields =
-                                decode_pv_request_fields(&payload.body, is_be);
+                            let pv_req_fields = decode_pv_request_fields(&payload.body, is_be);
                             let desc = match &pv_req_fields {
                                 Some(fields) => filter_structure_desc(&full_desc, fields),
                                 None => full_desc,
@@ -1399,8 +1399,7 @@ async fn handle_connection(
                     for (cid, name) in &payload.pv_requests {
                         if pv_store.contains_key(name)
                             || is_virtual_event_pv(name)
-                            || (is_pvlist_virtual_pv(name)
-                                && state.pvlist_mode == PvListMode::List)
+                            || (is_pvlist_virtual_pv(name) && state.pvlist_mode == PvListMode::List)
                             || (is_server_rpc_pv(name) && state.pvlist_mode != PvListMode::Off)
                         {
                             cids.push(*cid);
@@ -1444,8 +1443,7 @@ async fn handle_connection(
                     debug!("Conn {}: TCP search: no compatible protocol", conn_id);
                 }
             }
-            PvaPacketCommand::SearchResponse(_)
-            | PvaPacketCommand::Beacon(_) => {
+            PvaPacketCommand::SearchResponse(_) | PvaPacketCommand::Beacon(_) => {
                 let resp =
                     encode_message_error("Unexpected command for server endpoint", version, is_be);
                 send_msg(&state, conn_id, resp).await;
@@ -1630,24 +1628,37 @@ fn build_monitor_frame(sub: &MonitorSub, payload: &NtPayload) -> Option<Vec<u8>>
     let Some(prev) = sub.last_snapshot.as_ref() else {
         let bytes = if let Some(ref desc) = sub.filtered_desc {
             encode_monitor_data_response_filtered(
-                sub.ioid, subcmd, payload, desc, sub.version, sub.is_be,
+                sub.ioid,
+                subcmd,
+                payload,
+                desc,
+                sub.version,
+                sub.is_be,
             )
         } else {
-            encode_monitor_data_response_payload(
-                sub.ioid, subcmd, payload, sub.version, sub.is_be,
-            )
+            encode_monitor_data_response_payload(sub.ioid, subcmd, payload, sub.version, sub.is_be)
         };
         return Some(bytes);
     };
     if let Some(ref desc) = sub.filtered_desc {
         encode_monitor_data_response_delta(
-            sub.ioid, subcmd, prev, payload, desc, sub.version, sub.is_be,
+            sub.ioid,
+            subcmd,
+            prev,
+            payload,
+            desc,
+            sub.version,
+            sub.is_be,
         )
     } else if prev == payload {
         None
     } else {
         Some(encode_monitor_data_response_payload(
-            sub.ioid, subcmd, payload, sub.version, sub.is_be,
+            sub.ioid,
+            subcmd,
+            payload,
+            sub.version,
+            sub.is_be,
         ))
     }
 }

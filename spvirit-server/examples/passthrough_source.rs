@@ -34,8 +34,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use spvirit_codec::spvd_decode::{DecodedValue, FieldDesc, FieldType, StructureDesc, TypeCode};
-use spvirit_server::pvstore::{PvInfo, Source};
 use spvirit_server::PvaServer;
+use spvirit_server::pvstore::{PvInfo, Source};
 use spvirit_types::{NtPayload, NtScalar, ScalarValue};
 use tokio::sync::{RwLock, mpsc};
 
@@ -203,8 +203,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         loop {
             if let Some(sp) = store.get_value("CTRL:SETPOINT").await {
                 if let ScalarValue::F64(target) = sp {
-                    if let Some(ScalarValue::F64(current)) =
-                        store.get_value("CTRL:READBACK").await
+                    if let Some(ScalarValue::F64(current)) = store.get_value("CTRL:READBACK").await
                     {
                         // First-order exponential approach
                         let next = current + 0.1 * (target - current);

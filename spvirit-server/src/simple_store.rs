@@ -1082,7 +1082,10 @@ mod tests {
         records.insert("TEST:AI".into(), make_ai("TEST:AI", 0.0));
         let store = SimplePvStore::new(records, HashMap::new(), vec![], false);
         let info = store.claim("TEST:AI").await.unwrap();
-        assert_eq!(info.descriptor.struct_id.as_deref(), Some("epics:nt/NTScalar:1.0"));
+        assert_eq!(
+            info.descriptor.struct_id.as_deref(),
+            Some("epics:nt/NTScalar:1.0")
+        );
         let desc = info.descriptor;
         let value_field = desc.field("value").unwrap();
         assert!(matches!(

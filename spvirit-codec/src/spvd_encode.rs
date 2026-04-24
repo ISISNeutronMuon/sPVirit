@@ -1435,6 +1435,57 @@ fn collect_pv_request_paths(desc: &StructureDesc, prefix: &str, out: &mut Vec<St
     }
 }
 
+/// Decode the `record._options` key/value pairs from a pvRequest body.
+///
+/// Returns `None` if the pvRequest does not include a `record._options`
+/// substructure, or if the option values cannot be decoded as strings.
+pub fn decode_pv_request_options(body: &[u8], is_be: bool) -> Option<Vec<(String, String)>> {
+    if body.is_empty() {
+        return None;
+    }
+    let decoder = crate::spvd_decode::PvdDecoder::new(is_be);
+    let desc = decoder.parse_introspection(body)?;
+    let options_desc = desc.fields.iter().find_map(|f| {
+        if f.name != "record" {
+            return None;
+        }
+        if let FieldType::Structure(inner) = &f.field_type {
+            inner.fields.iter().find_map(|g| {
+                if g.name != "_options" {
+                    return None;
+                }
+                if let FieldType::Structure(opts) = &g.field_type {
+                    Some(opts.clone())
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        }
+    })?;
+
+    // The pvRequest body is `0x80 <desc> <values>`. The `field` sub-tree
+    // encodes empty structs only, so contributes no value bytes; the
+    // option strings follow immediately after the descriptor.
+    let desc_bytes = encode_structure_desc(&desc, is_be);
+    let values_start = 1 + desc_bytes.len();
+    if values_start > body.len() {
+        return None;
+    }
+    let mut cursor = &body[values_start..];
+    let mut out = Vec::with_capacity(options_desc.fields.len());
+    for f in &options_desc.fields {
+        if !matches!(f.field_type, FieldType::String) {
+            return None;
+        }
+        let (s, consumed) = crate::epics_decode::decode_string(cursor, is_be)?;
+        out.push((f.name.clone(), s));
+        cursor = &cursor[consumed..];
+    }
+    Some(out)
+}
+
 /// Filter a [`StructureDesc`] to include only the listed field paths.
 ///
 /// Paths may be dot-separated to descend into nested structures (e.g.
@@ -1574,9 +1625,8 @@ pub fn encode_nt_payload_values_for_desc(
         // Fast path: no narrowing.
         return encode_nt_payload_full(payload, is_be);
     }
-    let decoded = decode_payload_to_structure(payload, is_be).unwrap_or_else(|| {
-        DecodedValue::Structure(Vec::new())
-    });
+    let decoded = decode_payload_to_structure(payload, is_be)
+        .unwrap_or_else(|| DecodedValue::Structure(Vec::new()));
     encode_decoded_projected(&decoded, desc, is_be)
 }
 
@@ -1587,9 +1637,10 @@ fn structure_desc_equal(a: &StructureDesc, b: &StructureDesc) -> bool {
     if a.fields.len() != b.fields.len() {
         return false;
     }
-    a.fields.iter().zip(&b.fields).all(|(x, y)| {
-        x.name == y.name && field_type_equal(&x.field_type, &y.field_type)
-    })
+    a.fields
+        .iter()
+        .zip(&b.fields)
+        .all(|(x, y)| x.name == y.name && field_type_equal(&x.field_type, &y.field_type))
 }
 
 fn field_type_equal(a: &FieldType, b: &FieldType) -> bool {
@@ -1599,9 +1650,7 @@ fn field_type_equal(a: &FieldType, b: &FieldType) -> bool {
         (FieldType::String, FieldType::String) => true,
         (FieldType::StringArray, FieldType::StringArray) => true,
         (FieldType::Structure(x), FieldType::Structure(y)) => structure_desc_equal(x, y),
-        (FieldType::StructureArray(x), FieldType::StructureArray(y)) => {
-            structure_desc_equal(x, y)
-        }
+        (FieldType::StructureArray(x), FieldType::StructureArray(y)) => structure_desc_equal(x, y),
         (FieldType::Variant, FieldType::Variant) => true,
         (FieldType::VariantArray, FieldType::VariantArray) => true,
         (FieldType::BoundedString(x), FieldType::BoundedString(y)) => x == y,
@@ -1656,11 +1705,7 @@ pub fn encode_decoded_projected(
 /// Project an [`NtPayload`] onto `desc`, returning a [`DecodedValue::Structure`]
 /// that contains only the fields represented in `desc`. Missing descriptor
 /// fields are silently dropped.
-fn project_payload_on_desc(
-    payload: &NtPayload,
-    desc: &StructureDesc,
-    is_be: bool,
-) -> DecodedValue {
+fn project_payload_on_desc(payload: &NtPayload, desc: &StructureDesc, is_be: bool) -> DecodedValue {
     let decoded = decode_payload_to_structure(payload, is_be)
         .unwrap_or_else(|| DecodedValue::Structure(Vec::new()));
     project_decoded(&decoded, desc)
@@ -1711,9 +1756,9 @@ pub fn decoded_values_equal(a: &DecodedValue, b: &DecodedValue) -> bool {
         }
         (Structure(x), Structure(y)) => {
             x.len() == y.len()
-                && x.iter().zip(y).all(|((ln, lv), (rn, rv))| {
-                    ln == rn && decoded_values_equal(lv, rv)
-                })
+                && x.iter()
+                    .zip(y)
+                    .all(|((ln, lv), (rn, rv))| ln == rn && decoded_values_equal(lv, rv))
         }
         _ => false,
     }
@@ -1843,7 +1888,14 @@ pub fn encode_nt_payload_delta(
     let bitset = encode_bitset_from_flags(&bits, is_be);
     let mut values = Vec::new();
     let mut idx = 1usize;
-    encode_values_for_bits(&next_proj, filtered_desc, &bits, &mut idx, is_be, &mut values);
+    encode_values_for_bits(
+        &next_proj,
+        filtered_desc,
+        &bits,
+        &mut idx,
+        is_be,
+        &mut values,
+    );
     Some((bitset, values))
 }
 
@@ -1884,6 +1936,23 @@ fn spvd_count_structure_fields(desc: &StructureDesc) -> usize {
 /// The output is the *full* type-described pvRequest structure: a `0x80`
 /// tag followed by the structure descriptor and empty-struct field values.
 pub fn encode_pv_request(fields: &[&str], is_be: bool) -> Vec<u8> {
+    encode_pv_request_with_options(fields, &[], is_be)
+}
+
+/// Build a pvRequest structure with extra `record._options` key/value pairs.
+///
+/// `options` is an ordered list of `(name, value)` pairs (both strings) that
+/// are encoded as `structure record { structure _options { string name; ... } }`
+/// alongside the usual `field(...)` selector. This is the standard PVAccess
+/// mechanism for requesting transport options such as
+/// `pipeline=true,queueSize=N` on a monitor.
+///
+/// Empty `options` is equivalent to [`encode_pv_request`].
+pub fn encode_pv_request_with_options(
+    fields: &[&str],
+    options: &[(&str, &str)],
+    is_be: bool,
+) -> Vec<u8> {
     let tree = build_path_tree_from_strs(fields);
     let inner_fields = path_tree_to_field_descs(&tree);
 
@@ -1892,19 +1961,49 @@ pub fn encode_pv_request(fields: &[&str], is_be: bool) -> Vec<u8> {
         fields: inner_fields,
     };
 
+    let mut top_fields = vec![FieldDesc {
+        name: "field".to_string(),
+        field_type: FieldType::Structure(field_desc),
+    }];
+
+    if !options.is_empty() {
+        let options_desc = StructureDesc {
+            struct_id: None,
+            fields: options
+                .iter()
+                .map(|(k, _)| FieldDesc {
+                    name: (*k).to_string(),
+                    field_type: FieldType::String,
+                })
+                .collect(),
+        };
+        let record_desc = StructureDesc {
+            struct_id: None,
+            fields: vec![FieldDesc {
+                name: "_options".to_string(),
+                field_type: FieldType::Structure(options_desc),
+            }],
+        };
+        top_fields.push(FieldDesc {
+            name: "record".to_string(),
+            field_type: FieldType::Structure(record_desc),
+        });
+    }
+
     let pv_request_desc = StructureDesc {
         struct_id: None,
-        fields: vec![FieldDesc {
-            name: "field".to_string(),
-            field_type: FieldType::Structure(field_desc),
-        }],
+        fields: top_fields,
     };
 
     let mut out = Vec::new();
     out.push(0x80); // structure tag
     out.extend_from_slice(&encode_structure_desc(&pv_request_desc, is_be));
-    // Values: the field structure and all its children are empty structs, so
-    // there are no value bytes to write.
+    // Values: the `field` sub-tree is entirely empty structs (no leaves), so
+    // it contributes no bytes. If options are present, append the string
+    // values for record._options in declared order.
+    for (_, v) in options {
+        out.extend_from_slice(&encode_string_pvd(v, is_be));
+    }
     out
 }
 
@@ -2032,7 +2131,10 @@ mod tests {
         let fields = decode_pv_request_fields(&body, false).expect("fields");
         assert_eq!(
             fields,
-            vec!["alarm.severity".to_string(), "timeStamp.secondsPastEpoch".to_string()]
+            vec![
+                "alarm.severity".to_string(),
+                "timeStamp.secondsPastEpoch".to_string()
+            ]
         );
     }
 
@@ -2046,6 +2148,35 @@ mod tests {
     }
 
     #[test]
+    fn pv_request_with_pipeline_options_roundtrip() {
+        for is_be in [false, true] {
+            let body = encode_pv_request_with_options(
+                &["value", "alarm"],
+                &[("pipeline", "true"), ("queueSize", "4")],
+                is_be,
+            );
+            // Field selectors still parse correctly.
+            let fields = decode_pv_request_fields(&body, is_be).expect("fields");
+            assert_eq!(fields, vec!["value".to_string(), "alarm".to_string()]);
+            // Options round-trip.
+            let opts = decode_pv_request_options(&body, is_be).expect("opts");
+            assert_eq!(
+                opts,
+                vec![
+                    ("pipeline".to_string(), "true".to_string()),
+                    ("queueSize".to_string(), "4".to_string()),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn pv_request_without_options_has_no_record() {
+        let body = encode_pv_request(&["value"], false);
+        assert!(decode_pv_request_options(&body, false).is_none());
+    }
+
+    #[test]
     fn pv_request_empty_body_none() {
         assert!(decode_pv_request_fields(&[], false).is_none());
     }
@@ -2055,16 +2186,31 @@ mod tests {
         let alarm = StructureDesc {
             struct_id: Some("alarm_t".to_string()),
             fields: vec![
-                FieldDesc { name: "severity".into(), field_type: FieldType::Scalar(TypeCode::Int32) },
-                FieldDesc { name: "status".into(),   field_type: FieldType::Scalar(TypeCode::Int32) },
-                FieldDesc { name: "message".into(),  field_type: FieldType::String },
+                FieldDesc {
+                    name: "severity".into(),
+                    field_type: FieldType::Scalar(TypeCode::Int32),
+                },
+                FieldDesc {
+                    name: "status".into(),
+                    field_type: FieldType::Scalar(TypeCode::Int32),
+                },
+                FieldDesc {
+                    name: "message".into(),
+                    field_type: FieldType::String,
+                },
             ],
         };
         let desc = StructureDesc {
             struct_id: Some("epics:nt/NTScalar:1.0".into()),
             fields: vec![
-                FieldDesc { name: "value".into(), field_type: FieldType::Scalar(TypeCode::Float64) },
-                FieldDesc { name: "alarm".into(), field_type: FieldType::Structure(alarm.clone()) },
+                FieldDesc {
+                    name: "value".into(),
+                    field_type: FieldType::Scalar(TypeCode::Float64),
+                },
+                FieldDesc {
+                    name: "alarm".into(),
+                    field_type: FieldType::Structure(alarm.clone()),
+                },
             ],
         };
 

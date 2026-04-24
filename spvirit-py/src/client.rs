@@ -10,7 +10,6 @@ use pyo3::types::{PyDict, PyList};
 use spvirit_client::pva_client::PvaClient;
 use spvirit_client::search::{build_auto_broadcast_targets, discover_servers};
 
-
 use crate::convert::{decoded_to_py, py_to_json};
 use crate::errors::to_py_err;
 use crate::runtime::RUNTIME;
@@ -29,7 +28,12 @@ pub struct PyGetResult {
 }
 
 impl PyGetResult {
-    pub(crate) fn new(pv_name: String, value: PyObject, raw_pva: Vec<u8>, raw_pvd: Vec<u8>) -> Self {
+    pub(crate) fn new(
+        pv_name: String,
+        value: PyObject,
+        raw_pva: Vec<u8>,
+        raw_pvd: Vec<u8>,
+    ) -> Self {
         Self {
             pv_name,
             value,
@@ -147,9 +151,9 @@ impl PyClientBuilder {
     }
 
     fn name_server(mut slf: PyRefMut<'_, Self>, addr: String) -> PyResult<PyRefMut<'_, Self>> {
-        let _: SocketAddr = addr
-            .parse()
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid address: {e}")))?;
+        let _: SocketAddr = addr.parse().map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid address: {e}"))
+        })?;
         slf.name_servers.push(addr);
         Ok(slf)
     }
@@ -165,9 +169,9 @@ impl PyClientBuilder {
     }
 
     fn server_addr(mut slf: PyRefMut<'_, Self>, addr: String) -> PyResult<PyRefMut<'_, Self>> {
-        let _: SocketAddr = addr
-            .parse()
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid address: {e}")))?;
+        let _: SocketAddr = addr.parse().map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid address: {e}"))
+        })?;
         slf.server_addr = Some(addr);
         Ok(slf)
     }
@@ -214,23 +218,21 @@ impl PyClientBuilder {
             b = b.server_addr(sa);
         }
         if let Some(ref addr) = self.search_addr {
-            let ip: std::net::IpAddr = addr.parse().map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("invalid IP: {e}"))
-            })?;
+            let ip: std::net::IpAddr = addr
+                .parse()
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid IP: {e}")))?;
             b = b.search_addr(ip);
         }
         if let Some(ref addr) = self.bind_addr {
-            let ip: std::net::IpAddr = addr.parse().map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("invalid IP: {e}"))
-            })?;
+            let ip: std::net::IpAddr = addr
+                .parse()
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid IP: {e}")))?;
             b = b.bind_addr(ip);
         }
         if self.debug {
             b = b.debug();
         }
-        Ok(PyClient {
-            inner: b.build(),
-        })
+        Ok(PyClient { inner: b.build() })
     }
 }
 
@@ -387,9 +389,9 @@ impl PyClient {
 
     /// List PV names from a specific server.
     fn pvlist(&self, py: Python<'_>, server_addr: String) -> PyResult<Vec<String>> {
-        let addr: SocketAddr = server_addr
-            .parse()
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid address: {e}")))?;
+        let addr: SocketAddr = server_addr.parse().map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid address: {e}"))
+        })?;
         let client = self.inner.clone();
         py.allow_threads(|| RUNTIME.block_on(client.pvlist(addr)))
             .map_err(to_py_err)

@@ -37,7 +37,11 @@ impl PyAlarm {
     #[new]
     #[pyo3(signature = (severity=0, status=0, message=String::new()))]
     fn py_new(severity: i32, status: i32, message: String) -> Self {
-        Self { severity, status, message }
+        Self {
+            severity,
+            status,
+            message,
+        }
     }
 
     fn __repr__(&self) -> String {
@@ -76,7 +80,11 @@ impl PyTimeStamp {
     #[new]
     #[pyo3(signature = (seconds_past_epoch=0, nanoseconds=0, user_tag=0))]
     fn py_new(seconds_past_epoch: i64, nanoseconds: i32, user_tag: i32) -> Self {
-        Self { seconds_past_epoch, nanoseconds, user_tag }
+        Self {
+            seconds_past_epoch,
+            nanoseconds,
+            user_tag,
+        }
     }
 
     fn __repr__(&self) -> String {
@@ -120,8 +128,20 @@ impl From<&NtDisplay> for PyDisplay {
 impl PyDisplay {
     #[new]
     #[pyo3(signature = (limit_low=0.0, limit_high=0.0, description=String::new(), units=String::new(), precision=0))]
-    fn py_new(limit_low: f64, limit_high: f64, description: String, units: String, precision: i32) -> Self {
-        Self { limit_low, limit_high, description, units, precision }
+    fn py_new(
+        limit_low: f64,
+        limit_high: f64,
+        description: String,
+        units: String,
+        precision: i32,
+    ) -> Self {
+        Self {
+            limit_low,
+            limit_high,
+            description,
+            units,
+            precision,
+        }
     }
 
     fn __repr__(&self) -> String {
@@ -160,7 +180,11 @@ impl PyControl {
     #[new]
     #[pyo3(signature = (limit_low=0.0, limit_high=0.0, min_step=0.0))]
     fn py_new(limit_low: f64, limit_high: f64, min_step: f64) -> Self {
-        Self { limit_low, limit_high, min_step }
+        Self {
+            limit_low,
+            limit_high,
+            min_step,
+        }
     }
 
     fn __repr__(&self) -> String {
@@ -304,7 +328,9 @@ impl PyNtScalarArray {
     #[new]
     fn py_new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         let arr = py_to_scalar_array(value)?;
-        Ok(Self { inner: NtScalarArray::from_value(arr) })
+        Ok(Self {
+            inner: NtScalarArray::from_value(arr),
+        })
     }
 
     #[getter]
@@ -458,7 +484,10 @@ impl PyNtNdArray {
 
     fn __repr__(&self) -> String {
         let dims: Vec<i32> = self.inner.dimension.iter().map(|d| d.size).collect();
-        format!("NtNdArray(unique_id={}, dims={:?})", self.inner.unique_id, dims)
+        format!(
+            "NtNdArray(unique_id={}, dims={:?})",
+            self.inner.unique_id, dims
+        )
     }
 }
 
@@ -483,10 +512,26 @@ pub fn py_to_nt_payload(obj: &Bound<'_, PyAny>) -> PyResult<NtPayload> {
 
 pub fn nt_payload_to_py(py: Python<'_>, payload: NtPayload) -> PyObject {
     match payload {
-        NtPayload::Scalar(s) => PyNtScalar::new(s).into_pyobject(py).expect("NtScalar").into_any().unbind(),
-        NtPayload::ScalarArray(a) => PyNtScalarArray::new(a).into_pyobject(py).expect("NtScalarArray").into_any().unbind(),
-        NtPayload::Table(t) => PyNtTable::new(t).into_pyobject(py).expect("NtTable").into_any().unbind(),
-        NtPayload::NdArray(n) => PyNtNdArray::new(n).into_pyobject(py).expect("NtNdArray").into_any().unbind(),
+        NtPayload::Scalar(s) => PyNtScalar::new(s)
+            .into_pyobject(py)
+            .expect("NtScalar")
+            .into_any()
+            .unbind(),
+        NtPayload::ScalarArray(a) => PyNtScalarArray::new(a)
+            .into_pyobject(py)
+            .expect("NtScalarArray")
+            .into_any()
+            .unbind(),
+        NtPayload::Table(t) => PyNtTable::new(t)
+            .into_pyobject(py)
+            .expect("NtTable")
+            .into_any()
+            .unbind(),
+        NtPayload::NdArray(n) => PyNtNdArray::new(n)
+            .into_pyobject(py)
+            .expect("NtNdArray")
+            .into_any()
+            .unbind(),
         NtPayload::Enum(e) => {
             let d = PyDict::new(py);
             d.set_item("index", e.index).ok();

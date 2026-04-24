@@ -1,4 +1,4 @@
-use spvirit_client::PvaClient;
+use spvirit_client::{MonitorOptions, PvaClient};
 use std::ops::ControlFlow;
 
 /// Minimal `pvmonitor` example.
@@ -8,12 +8,14 @@ use std::ops::ControlFlow;
 /// ```text
 /// cargo run --example pvmonitor -- MY:PV
 /// cargo run --example pvmonitor -- MY:PV --fields value,alarm.severity
+/// cargo run --example pvmonitor -- MY:PV --pipeline 4
 /// ```
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mut pv: Option<String> = None;
     let mut fields: Vec<String> = Vec::new();
+    let mut pipeline: Option<u32> = None;
 
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -24,6 +26,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty()),
                 );
+            }
+            "--pipeline" => {
+                let raw = args.next().ok_or("--pipeline requires a queue size")?;
+                pipeline = Some(raw.parse()?);
             }
             _ if pv.is_none() => pv = Some(a),
             other => return Err(format!("unexpected argument: {other}").into()),
@@ -36,10 +42,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{value}");
         ControlFlow::Continue(())
     };
-    if fields.is_empty() {
+    let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
+    if let Some(q) = pipeline {
+        client
+            .pvmonitor_with_options(&pv, &refs, MonitorOptions::pipelined(q), cb)
+            .await?;
+    } else if fields.is_empty() {
         client.pvmonitor(&pv, cb).await?;
     } else {
-        let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
         client.pvmonitor_fields(&pv, &refs, cb).await?;
     }
     Ok(())

@@ -9,8 +9,8 @@
 //! └── IoError
 //! ```
 
-use pyo3::prelude::*;
 use pyo3::create_exception;
+use pyo3::prelude::*;
 use spvirit_client::PvGetError;
 
 create_exception!(spvirit, SpviritError, pyo3::exceptions::PyException);

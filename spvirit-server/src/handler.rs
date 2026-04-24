@@ -396,10 +396,7 @@ async fn has_pv(state: &ServerState, pv_name: &str) -> bool {
 // Notify helpers
 // ---------------------------------------------------------------------------
 
-async fn notify_changed_records(
-    state: &ServerState,
-    changed: Vec<(String, NtPayload)>,
-) {
+async fn notify_changed_records(state: &ServerState, changed: Vec<(String, NtPayload)>) {
     for (name, payload) in changed {
         state.beacon_change.fetch_add(1, Ordering::SeqCst);
         state.registry.notify_monitors(&name, &payload).await;
@@ -595,11 +592,7 @@ async fn handle_server_rpc(
 // Control message handler (inside segmented stream)
 // ---------------------------------------------------------------------------
 
-async fn handle_control_message(
-    state: &ServerState,
-    conn_id: u64,
-    header: &PvaHeader,
-) {
+async fn handle_control_message(state: &ServerState, conn_id: u64, header: &PvaHeader) {
     debug!(
         "Conn {}: control (segmented) cmd={} data={}",
         conn_id, header.command, header.payload_length
@@ -815,7 +808,8 @@ pub async fn handle_connection(
     state.registry.send_msg(conn_id, set_byte_order).await;
 
     // Server sends Connection Validation (cmd=1) next.
-    let server_validation = encode_connection_validation(16_384, 512, &["anonymous", "ca"], 2, false);
+    let server_validation =
+        encode_connection_validation(16_384, 512, &["anonymous", "ca"], 2, false);
     validate_encoded_packet(conn_id, "server_validation_init", &server_validation);
     dump_hex_packet(
         conn_id,
@@ -1071,31 +1065,28 @@ pub async fn handle_connection(
                         if is_init {
                             // Init only needs the type descriptor, not the data.
                             // Use get_descriptor first; fall back to snapshot.
-                            let full_desc = if let Some(desc) =
-                                state.sources.get_descriptor(&pv_name).await
-                            {
-                                desc
-                            } else if let Some(nt) =
-                                get_nt_snapshot(&state, &pv_name).await
-                            {
-                                nt_payload_desc(&nt)
-                            } else {
-                                state
-                                    .registry
-                                    .send_msg(
-                                        conn_id,
-                                        encode_op_error(
-                                            payload.command,
-                                            payload.subcmd,
-                                            ioid,
-                                            "PV not found",
-                                            version,
-                                            is_be,
-                                        ),
-                                    )
-                                    .await;
-                                continue;
-                            };
+                            let full_desc =
+                                if let Some(desc) = state.sources.get_descriptor(&pv_name).await {
+                                    desc
+                                } else if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
+                                    nt_payload_desc(&nt)
+                                } else {
+                                    state
+                                        .registry
+                                        .send_msg(
+                                            conn_id,
+                                            encode_op_error(
+                                                payload.command,
+                                                payload.subcmd,
+                                                ioid,
+                                                "PV not found",
+                                                version,
+                                                is_be,
+                                            ),
+                                        )
+                                        .await;
+                                    continue;
+                                };
                             let pv_req_fields = decode_pv_request_fields(&payload.body, is_be);
                             let desc = match &pv_req_fields {
                                 Some(fields) => filter_structure_desc(&full_desc, fields),
@@ -1148,29 +1139,28 @@ pub async fn handle_connection(
                             // Init only needs the type descriptor, not current data.
                             // Use get_descriptor first; fall back to snapshot so PUT
                             // can target PVs that do not yet have any data.
-                            let desc = if let Some(desc) =
-                                state.sources.get_descriptor(&pv_name).await
-                            {
-                                desc
-                            } else if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
-                                nt_payload_desc(&nt)
-                            } else {
-                                state
-                                    .registry
-                                    .send_msg(
-                                        conn_id,
-                                        encode_op_error(
-                                            payload.command,
-                                            payload.subcmd,
-                                            ioid,
-                                            "PV not found",
-                                            version,
-                                            is_be,
-                                        ),
-                                    )
-                                    .await;
-                                continue;
-                            };
+                            let desc =
+                                if let Some(desc) = state.sources.get_descriptor(&pv_name).await {
+                                    desc
+                                } else if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
+                                    nt_payload_desc(&nt)
+                                } else {
+                                    state
+                                        .registry
+                                        .send_msg(
+                                            conn_id,
+                                            encode_op_error(
+                                                payload.command,
+                                                payload.subcmd,
+                                                ioid,
+                                                "PV not found",
+                                                version,
+                                                is_be,
+                                            ),
+                                        )
+                                        .await;
+                                    continue;
+                                };
                             if !is_virtual_event_pv(&pv_name)
                                 && !is_writable_pv(&state, &pv_name).await
                             {
@@ -1304,29 +1294,28 @@ pub async fn handle_connection(
                             // Init only needs the type descriptor, not current data.
                             // Use get_descriptor first; fall back to snapshot so that
                             // clients can initiate PUT_GET before any data exists.
-                            let desc = if let Some(desc) =
-                                state.sources.get_descriptor(&pv_name).await
-                            {
-                                desc
-                            } else if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
-                                nt_payload_desc(&nt)
-                            } else {
-                                state
-                                    .registry
-                                    .send_msg(
-                                        conn_id,
-                                        encode_op_error(
-                                            payload.command,
-                                            payload.subcmd,
-                                            ioid,
-                                            "PV not found",
-                                            version,
-                                            is_be,
-                                        ),
-                                    )
-                                    .await;
-                                continue;
-                            };
+                            let desc =
+                                if let Some(desc) = state.sources.get_descriptor(&pv_name).await {
+                                    desc
+                                } else if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
+                                    nt_payload_desc(&nt)
+                                } else {
+                                    state
+                                        .registry
+                                        .send_msg(
+                                            conn_id,
+                                            encode_op_error(
+                                                payload.command,
+                                                payload.subcmd,
+                                                ioid,
+                                                "PV not found",
+                                                version,
+                                                is_be,
+                                            ),
+                                        )
+                                        .await;
+                                    continue;
+                                };
                             if !is_virtual_event_pv(&pv_name)
                                 && !is_writable_pv(&state, &pv_name).await
                             {
@@ -1436,29 +1425,28 @@ pub async fn handle_connection(
                             // updates are pushed once data arrives. Strict clients
                             // like p4p treat a MONITOR init error as fatal, so we
                             // must not error out when only the descriptor is known.
-                            let full_desc = if let Some(desc) =
-                                state.sources.get_descriptor(&pv_name).await
-                            {
-                                desc
-                            } else if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
-                                nt_payload_desc(&nt)
-                            } else {
-                                state
-                                    .registry
-                                    .send_msg(
-                                        conn_id,
-                                        encode_op_error(
-                                            payload.command,
-                                            payload.subcmd,
-                                            ioid,
-                                            "PV not found",
-                                            version,
-                                            is_be,
-                                        ),
-                                    )
-                                    .await;
-                                continue;
-                            };
+                            let full_desc =
+                                if let Some(desc) = state.sources.get_descriptor(&pv_name).await {
+                                    desc
+                                } else if let Some(nt) = get_nt_snapshot(&state, &pv_name).await {
+                                    nt_payload_desc(&nt)
+                                } else {
+                                    state
+                                        .registry
+                                        .send_msg(
+                                            conn_id,
+                                            encode_op_error(
+                                                payload.command,
+                                                payload.subcmd,
+                                                ioid,
+                                                "PV not found",
+                                                version,
+                                                is_be,
+                                            ),
+                                        )
+                                        .await;
+                                    continue;
+                                };
                             let pv_req_fields = decode_pv_request_fields(&payload.body, is_be);
                             let desc = match &pv_req_fields {
                                 Some(fields) => filter_structure_desc(&full_desc, fields),
@@ -1656,10 +1644,7 @@ pub async fn handle_connection(
                                         .parse_introspection_with_len(&payload.body)
                                         .and_then(|(desc, consumed)| {
                                             decoder
-                                                .decode_structure(
-                                                    &payload.body[consumed..],
-                                                    &desc,
-                                                )
+                                                .decode_structure(&payload.body[consumed..], &desc)
                                                 .map(|(val, _)| val)
                                         })
                                 } else {
@@ -1670,14 +1655,13 @@ pub async fn handle_connection(
                                 let args_ref = args.as_ref().unwrap_or(&empty);
                                 match state.sources.rpc(&pv_name, args_ref).await {
                                     Ok(result) => {
-                                        let resp =
-                                            encode_op_rpc_data_response_payload(
-                                                ioid,
-                                                payload.subcmd,
-                                                &result,
-                                                version,
-                                                is_be,
-                                            );
+                                        let resp = encode_op_rpc_data_response_payload(
+                                            ioid,
+                                            payload.subcmd,
+                                            &result,
+                                            version,
+                                            is_be,
+                                        );
                                         state.registry.send_msg(conn_id, resp).await;
                                     }
                                     Err(msg) => {
@@ -1813,8 +1797,7 @@ pub async fn handle_connection(
                     for (cid, name) in &payload.pv_requests {
                         if state.sources.has_pv(name).await
                             || is_virtual_event_pv(name)
-                            || (is_pvlist_virtual_pv(name)
-                                && state.pvlist_mode == PvListMode::List)
+                            || (is_pvlist_virtual_pv(name) && state.pvlist_mode == PvListMode::List)
                             || (is_server_rpc_pv(name) && state.pvlist_mode != PvListMode::Off)
                         {
                             cids.push(*cid);
@@ -1857,8 +1840,7 @@ pub async fn handle_connection(
                     debug!("Conn {}: TCP search: no compatible protocol", conn_id);
                 }
             }
-            PvaPacketCommand::SearchResponse(_)
-            | PvaPacketCommand::Beacon(_) => {
+            PvaPacketCommand::SearchResponse(_) | PvaPacketCommand::Beacon(_) => {
                 let resp =
                     encode_message_error("Unexpected command for server endpoint", version, is_be);
                 state.registry.send_msg(conn_id, resp).await;

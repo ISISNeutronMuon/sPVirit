@@ -300,7 +300,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rt = Runtime::new()?;
     let result =
-        rt.block_on(async move { pvput(&opts, &input, simple_flow, no_flow_fallback, &fields).await });
+        rt.block_on(
+            async move { pvput(&opts, &input, simple_flow, no_flow_fallback, &fields).await },
+        );
     match result {
         Ok(()) => Ok(()),
         Err(e) => {

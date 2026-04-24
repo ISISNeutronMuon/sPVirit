@@ -23,10 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "author".to_string(),
                     PvValue::Scalar(ScalarValue::Str("spvirit".to_string())),
                 ),
-                (
-                    "version".to_string(),
-                    PvValue::Scalar(ScalarValue::I32(1)),
-                ),
+                ("version".to_string(), PvValue::Scalar(ScalarValue::I32(1))),
             ],
         )
         .build();

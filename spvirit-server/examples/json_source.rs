@@ -31,8 +31,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use spvirit_codec::spvd_decode::{DecodedValue, FieldDesc, FieldType, StructureDesc, TypeCode};
-use spvirit_server::pvstore::{PvInfo, Source};
 use spvirit_server::PvaServer;
+use spvirit_server::pvstore::{PvInfo, Source};
 use spvirit_types::{NtPayload, NtScalar, ScalarValue};
 use tokio::sync::{RwLock, mpsc};
 
@@ -65,7 +65,11 @@ impl JsonSource {
             let _ = std::fs::write(&path, json);
         }
 
-        println!("[json_source] loaded {} PVs from {}", pvs.len(), path.display());
+        println!(
+            "[json_source] loaded {} PVs from {}",
+            pvs.len(),
+            path.display()
+        );
         Self {
             path,
             pvs: Arc::new(RwLock::new(pvs)),
@@ -113,7 +117,9 @@ impl Source for JsonSource {
         Box::pin(async move {
             let pvs = self.pvs.read().await;
             let val = *pvs.get(&name)?;
-            Some(NtPayload::Scalar(NtScalar::from_value(ScalarValue::F64(val))))
+            Some(NtPayload::Scalar(NtScalar::from_value(ScalarValue::F64(
+                val,
+            ))))
         })
     }
 
@@ -128,17 +134,15 @@ impl Source for JsonSource {
             let new_val = match &value {
                 DecodedValue::Float64(v) => *v,
                 DecodedValue::Int32(v) => *v as f64,
-                DecodedValue::Structure(fields) => {
-                    fields
-                        .iter()
-                        .find(|(k, _)| k == "value")
-                        .and_then(|(_, v)| match v {
-                            DecodedValue::Float64(f) => Some(*f),
-                            DecodedValue::Int32(i) => Some(*i as f64),
-                            _ => None,
-                        })
-                        .ok_or("missing numeric 'value' field")?
-                }
+                DecodedValue::Structure(fields) => fields
+                    .iter()
+                    .find(|(k, _)| k == "value")
+                    .and_then(|(_, v)| match v {
+                        DecodedValue::Float64(f) => Some(*f),
+                        DecodedValue::Int32(i) => Some(*i as f64),
+                        _ => None,
+                    })
+                    .ok_or("missing numeric 'value' field")?,
                 _ => return Err("unsupported value type".to_string()),
             };
 

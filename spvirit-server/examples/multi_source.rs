@@ -28,8 +28,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use spvirit_codec::spvd_decode::DecodedValue;
-use spvirit_server::pvstore::{PvInfo, Source};
 use spvirit_server::PvaServer;
+use spvirit_server::pvstore::{PvInfo, Source};
 use spvirit_types::{NtPayload, NtScalar, ScalarValue};
 
 use spvirit_server::simple_store::descriptor_for_payload;
@@ -45,7 +45,10 @@ struct ConstSource {
 impl ConstSource {
     fn new() -> Self {
         Self {
-            pvs: vec![("CONST:PI", std::f64::consts::PI), ("CONST:E", std::f64::consts::E)],
+            pvs: vec![
+                ("CONST:PI", std::f64::consts::PI),
+                ("CONST:E", std::f64::consts::E),
+            ],
         }
     }
 
@@ -71,7 +74,9 @@ impl Source for ConstSource {
         let name = name.to_string();
         Box::pin(async move {
             let val = self.lookup(&name)?;
-            Some(NtPayload::Scalar(NtScalar::from_value(ScalarValue::F64(val))))
+            Some(NtPayload::Scalar(NtScalar::from_value(ScalarValue::F64(
+                val,
+            ))))
         })
     }
 
@@ -124,7 +129,9 @@ impl Source for ComputedSource {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_secs_f64();
-                Some(NtPayload::Scalar(NtScalar::from_value(ScalarValue::F64(now))))
+                Some(NtPayload::Scalar(NtScalar::from_value(ScalarValue::F64(
+                    now,
+                ))))
             } else {
                 None
             }

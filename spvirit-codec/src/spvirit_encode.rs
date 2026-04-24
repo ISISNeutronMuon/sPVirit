@@ -51,7 +51,11 @@ pub fn encode_message_error(message: &str, version: u8, is_be: bool) -> Vec<u8> 
     // MESSAGE (cmd=18) payload: ioid(u32) + message_type(u8) + message(string)
     // Use ioid=0 and message_type=2 (error).
     let mut payload = Vec::new();
-    payload.extend_from_slice(&if is_be { 0u32.to_be_bytes() } else { 0u32.to_le_bytes() });
+    payload.extend_from_slice(&if is_be {
+        0u32.to_be_bytes()
+    } else {
+        0u32.to_le_bytes()
+    });
     payload.push(2); // error
     payload.extend_from_slice(&encode_string_pva(message, is_be));
     let mut out = encode_header(true, is_be, false, version, 18, payload.len() as u32);
@@ -894,8 +898,7 @@ pub fn encode_monitor_data_response_delta(
     version: u8,
     is_be: bool,
 ) -> Option<Vec<u8>> {
-    let (bitset, values) =
-        encode_nt_payload_delta(prev_value, next_value, filtered_desc, is_be)?;
+    let (bitset, values) = encode_nt_payload_delta(prev_value, next_value, filtered_desc, is_be)?;
     let mut payload = Vec::new();
     payload.extend_from_slice(&if is_be {
         ioid.to_be_bytes()

@@ -47,7 +47,10 @@ impl RecordType {
     }
 
     pub fn is_output(&self) -> bool {
-        matches!(self, Self::Ao | Self::Bo | Self::StringOut | Self::Aao | Self::Mbbo)
+        matches!(
+            self,
+            Self::Ao | Self::Bo | Self::StringOut | Self::Aao | Self::Mbbo
+        )
     }
 }
 

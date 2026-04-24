@@ -52,11 +52,20 @@ impl MonitorRegistry {
         let Some(prev) = sub.last_snapshot.as_ref() else {
             let bytes = if let Some(ref desc) = sub.filtered_desc {
                 encode_monitor_data_response_filtered(
-                    sub.ioid, subcmd, payload, desc, sub.version, sub.is_be,
+                    sub.ioid,
+                    subcmd,
+                    payload,
+                    desc,
+                    sub.version,
+                    sub.is_be,
                 )
             } else {
                 encode_monitor_data_response_payload(
-                    sub.ioid, subcmd, payload, sub.version, sub.is_be,
+                    sub.ioid,
+                    subcmd,
+                    payload,
+                    sub.version,
+                    sub.is_be,
                 )
             };
             return Some(bytes);
@@ -66,7 +75,13 @@ impl MonitorRegistry {
             // Filtered subscribers get a true sparse delta (may be None if the
             // filtered view is unchanged).
             encode_monitor_data_response_delta(
-                sub.ioid, subcmd, prev, payload, desc, sub.version, sub.is_be,
+                sub.ioid,
+                subcmd,
+                prev,
+                payload,
+                desc,
+                sub.version,
+                sub.is_be,
             )
         } else if prev == payload {
             // Unfiltered subscriber, unchanged payload: suppress.
@@ -74,7 +89,11 @@ impl MonitorRegistry {
         } else {
             // Unfiltered subscriber, payload changed: send full.
             Some(encode_monitor_data_response_payload(
-                sub.ioid, subcmd, payload, sub.version, sub.is_be,
+                sub.ioid,
+                subcmd,
+                payload,
+                sub.version,
+                sub.is_be,
             ))
         }
     }

@@ -23,7 +23,7 @@ use tokio::time::{Instant, interval};
 
 use spvirit_codec::epics_decode::{PvaPacket, PvaPacketCommand};
 use spvirit_codec::spvd_decode::{DecodedValue, PvdDecoder, StructureDesc};
-use spvirit_codec::spvd_encode::encode_pv_request;
+use spvirit_codec::spvd_encode::{encode_pv_request, encode_pv_request_with_options};
 use spvirit_codec::spvirit_encode::{
     encode_control_message, encode_get_field_request, encode_monitor_request, encode_put_request,
 };
@@ -55,6 +55,34 @@ fn build_pv_request(fields: &[&str], is_be: bool) -> Vec<u8> {
         vec![0xfd, 0x02, 0x00, 0x80, 0x00, 0x00]
     } else {
         encode_pv_request(fields, is_be)
+    }
+}
+
+/// Options controlling a monitor subscription.
+///
+/// By default a monitor runs without flow control (the server streams
+/// updates as they are produced). Set [`MonitorOptions::pipeline`] to a
+/// positive `queueSize` to request PVAccess monitor pipelining: the server
+/// will send at most `queueSize` updates before waiting for an `ACK`, and
+/// the client automatically replies with ACK messages as it consumes them.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MonitorOptions {
+    /// Request monitor pipelining with the given initial queue size.
+    ///
+    /// `None` (or `Some(0)`) disables pipelining.
+    pub pipeline: Option<u32>,
+}
+
+impl MonitorOptions {
+    /// Enable pipelining with the given initial `queueSize`.
+    pub fn pipelined(queue_size: u32) -> Self {
+        Self {
+            pipeline: if queue_size == 0 {
+                None
+            } else {
+                Some(queue_size)
+            },
+        }
     }
 }
 
@@ -444,6 +472,26 @@ impl PvaClient {
         &self,
         pv_name: &str,
         fields: &[&str],
+        callback: F,
+    ) -> Result<(), PvGetError>
+    where
+        F: FnMut(&DecodedValue) -> ControlFlow<()>,
+    {
+        self.pvmonitor_with_options(pv_name, fields, MonitorOptions::default(), callback)
+            .await
+    }
+
+    /// Subscribe to a PV with explicit field selection and monitor options.
+    ///
+    /// See [`MonitorOptions`] — in particular, set `pipeline` to request
+    /// PVAccess monitor pipelining (flow-controlled delivery with client
+    /// ACKs). When pipelining is disabled this behaves identically to
+    /// [`pvmonitor_fields`](Self::pvmonitor_fields).
+    pub async fn pvmonitor_with_options<F>(
+        &self,
+        pv_name: &str,
+        fields: &[&str],
+        options: MonitorOptions,
         mut callback: F,
     ) -> Result<(), PvGetError>
     where
@@ -460,9 +508,33 @@ impl PvaClient {
         let ioid = alloc_ioid();
         let decoder = PvdDecoder::new(is_be);
 
-        // MONITOR INIT — pvRequest from caller-supplied field paths.
-        let pv_request = build_pv_request(fields, is_be);
-        let init = encode_monitor_request(sid, ioid, QOS_INIT, &pv_request, PVA_VERSION, is_be);
+        let pipeline_queue = options.pipeline.filter(|&n| n > 0);
+
+        // MONITOR INIT — pvRequest from caller-supplied field paths. If
+        // pipelining is enabled, encode `record._options.pipeline=true,
+        // queueSize=N` in the pvRequest (for server-side option parsing,
+        // e.g. pvxs/Java) and append the queueSize u32 to the INIT body
+        // (which the spvirit server reads directly), and set the 0x80
+        // pipeline bit on the INIT subcommand.
+        let (pv_request, init_subcmd) = if let Some(qsize) = pipeline_queue {
+            let qs_str = qsize.to_string();
+            let mut body = encode_pv_request_with_options(
+                fields,
+                &[("pipeline", "true"), ("queueSize", qs_str.as_str())],
+                is_be,
+            );
+            let qs_bytes = if is_be {
+                qsize.to_be_bytes()
+            } else {
+                qsize.to_le_bytes()
+            };
+            body.extend_from_slice(&qs_bytes);
+            (body, QOS_INIT | 0x80)
+        } else {
+            (build_pv_request(fields, is_be), QOS_INIT)
+        };
+
+        let init = encode_monitor_request(sid, ioid, init_subcmd, &pv_request, PVA_VERSION, is_be);
         stream.write_all(&init).await?;
 
         // Read INIT response — extract introspection
@@ -473,9 +545,20 @@ impl PvaClient {
 
         let field_desc = decode_init_introspection(&init_bytes, "MONITOR")?;
 
-        // Start subscription (non-pipeline: START 0x04 + GET 0x40 = 0x44)
+        // Start subscription: START (0x04) | GET (0x40) = 0x44. The pipeline
+        // bit 0x80 must NOT be set here — on a non-INIT MONITOR message the
+        // 0x80 bit means "ACK with u32 nack body" (see pvxs servermon.cpp).
+        // Mixing START with an ACK bit on an empty body would make the
+        // server fail to read the u32 and drop the TCP connection.
         let start = encode_monitor_request(sid, ioid, 0x44, &[], PVA_VERSION, is_be);
         stream.write_all(&start).await?;
+
+        // Pipeline credit tracking. `consumed_since_ack` counts updates we
+        // have received but not yet acknowledged; when it reaches the ACK
+        // threshold (half of queueSize, minimum 1) we send an ACK message
+        // to return credits to the server.
+        let mut consumed_since_ack: u32 = 0;
+        let ack_threshold: u32 = pipeline_queue.map(|q| (q / 2).max(1)).unwrap_or(0);
 
         // Event loop — with echo keepalive and timeout resilience
         let mut echo_interval = interval(Duration::from_secs(10));
@@ -502,7 +585,43 @@ impl PvaClient {
                             if let Some((decoded, _)) =
                                 decoder.decode_structure_with_bitset(&payload[pos..], &field_desc)
                             {
-                                if callback(&decoded).is_break() {
+                                let flow = callback(&decoded);
+
+                                if pipeline_queue.is_some() {
+                                    consumed_since_ack = consumed_since_ack.saturating_add(1);
+                                    if consumed_since_ack >= ack_threshold {
+                                        let ack_bytes = if is_be {
+                                            consumed_since_ack.to_be_bytes()
+                                        } else {
+                                            consumed_since_ack.to_le_bytes()
+                                        };
+                                        let ack = encode_monitor_request(
+                                            sid,
+                                            ioid,
+                                            0x80,
+                                            &ack_bytes,
+                                            PVA_VERSION,
+                                            is_be,
+                                        );
+                                        if stream.write_all(&ack).await.is_err() {
+                                            return Ok(());
+                                        }
+                                        consumed_since_ack = 0;
+                                    }
+                                }
+
+                                if flow.is_break() {
+                                    // Best-effort DESTROY so the server releases
+                                    // its per-subscription state promptly.
+                                    let destroy = encode_monitor_request(
+                                        sid,
+                                        ioid,
+                                        0x10,
+                                        &[],
+                                        PVA_VERSION,
+                                        is_be,
+                                    );
+                                    let _ = stream.write_all(&destroy).await;
                                     return Ok(());
                                 }
                             }
@@ -538,11 +657,9 @@ impl PvaClient {
         let msg = encode_get_field_request(sid, ioid, None, PVA_VERSION, is_be);
         stream.write_all(&msg).await?;
 
-        let resp_bytes = read_until(
-            &mut stream,
-            self.timeout,
-            |cmd| matches!(cmd, PvaPacketCommand::GetField(_)),
-        )
+        let resp_bytes = read_until(&mut stream, self.timeout, |cmd| {
+            matches!(cmd, PvaPacketCommand::GetField(_))
+        })
         .await?;
 
         let mut pkt = PvaPacket::new(&resp_bytes);
@@ -560,9 +677,9 @@ impl PvaClient {
                         return Err(PvGetError::Protocol(format!("GET_FIELD error: {msg}")));
                     }
                 }
-                let desc = payload
-                    .introspection
-                    .ok_or_else(|| PvGetError::Decode("missing GET_FIELD introspection".to_string()))?;
+                let desc = payload.introspection.ok_or_else(|| {
+                    PvGetError::Decode("missing GET_FIELD introspection".to_string())
+                })?;
                 Ok((desc, server_addr))
             }
             _ => Err(PvGetError::Protocol(
@@ -698,7 +815,9 @@ where
     F: FnMut(&DecodedValue) -> ControlFlow<()>,
 {
     let client = client_from_opts(opts);
-    client.pvmonitor_fields(&opts.pv_name, fields, callback).await
+    client
+        .pvmonitor_fields(&opts.pv_name, fields, callback)
+        .await
 }
 
 /// Write a value to a PV with explicit field selection (one-shot).

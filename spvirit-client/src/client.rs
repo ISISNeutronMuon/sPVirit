@@ -6,10 +6,10 @@ use crate::auth::{resolved_authnz_host, resolved_authnz_user};
 use crate::search::resolve_pv_server;
 use crate::transport::{read_packet, read_until};
 use crate::types::{PvGetError, PvGetOptions, PvGetResult};
-use spvirit_codec::spvd_encode::encode_pv_request;
 use spvirit_codec::epics_decode::{
     PvaPacket, PvaPacketCommand, decode_op_response_status as codec_decode_op_response_status,
 };
+use spvirit_codec::spvd_encode::encode_pv_request;
 use spvirit_codec::spvirit_encode::encode_client_connection_validation;
 pub use spvirit_codec::spvirit_encode::{
     encode_create_channel_request, encode_get_field_request, encode_get_request,
@@ -144,10 +144,7 @@ pub async fn pvget(opts: &PvGetOptions) -> Result<PvGetResult, PvGetError> {
 ///
 /// If `fields` is empty, requests all fields (equivalent to `-r ""`).
 /// Otherwise, encodes a pvRequest like `field(value,alarm,timeStamp)`.
-pub async fn pvget_fields(
-    opts: &PvGetOptions,
-    fields: &[&str],
-) -> Result<PvGetResult, PvGetError> {
+pub async fn pvget_fields(opts: &PvGetOptions, fields: &[&str]) -> Result<PvGetResult, PvGetError> {
     let target = resolve_pv_server(opts).await?;
 
     let conn = establish_channel(target, opts).await?;
@@ -166,14 +163,7 @@ pub async fn pvget_fields(
     } else {
         encode_pv_request(fields, is_be)
     };
-    let get_init_req = encode_get_request(
-        sid,
-        ioid,
-        0x08,
-        &pv_request,
-        version,
-        is_be,
-    );
+    let get_init_req = encode_get_request(sid, ioid, 0x08, &pv_request, version, is_be);
     stream.write_all(&get_init_req).await?;
 
     let init_resp = read_until(

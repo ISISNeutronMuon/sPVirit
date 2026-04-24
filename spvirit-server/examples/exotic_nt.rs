@@ -68,9 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "Calibrate".to_string(),
                 ],
             );
-            store
-                .put_nt("SIM:MODE", NtPayload::Enum(mode_nt))
-                .await;
+            store.put_nt("SIM:MODE", NtPayload::Enum(mode_nt)).await;
 
             let state_idx = (tick % 3) as i32;
             let state_nt = NtEnum::new(
@@ -81,9 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "Error".to_string(),
                 ],
             );
-            store
-                .put_nt("SIM:STATE", NtPayload::Enum(state_nt))
-                .await;
+            store.put_nt("SIM:STATE", NtPayload::Enum(state_nt)).await;
 
             // ── Generic structure — updating position ────────────────
             let x = tick as f64 * 0.1;

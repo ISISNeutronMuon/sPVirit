@@ -389,7 +389,9 @@ impl Source for GroupSource {
         &self,
         name: &str,
         value: &DecodedValue,
-    ) -> Pin<Box<dyn Future<Output = std::result::Result<Vec<(String, NtPayload)>, String>> + Send + '_>> {
+    ) -> Pin<
+        Box<dyn Future<Output = std::result::Result<Vec<(String, NtPayload)>, String>> + Send + '_>,
+    > {
         let name = name.to_string();
         let value = value.clone();
         Box::pin(async move {

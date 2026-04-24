@@ -6,10 +6,10 @@ use std::time::Duration;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
-use spvirit_client::pvlist::{pvlist_with_fallback, PvListSource};
+use spvirit_client::pvlist::{PvListSource, pvlist_with_fallback};
 use spvirit_client::search::{
-    build_auto_broadcast_targets, build_search_targets, discover_servers, parse_addr_list,
-    search_pv, search_pv_tcp, SearchTarget,
+    SearchTarget, build_auto_broadcast_targets, build_search_targets, discover_servers,
+    parse_addr_list, search_pv, search_pv_tcp,
 };
 use spvirit_client::types::PvOptions;
 
@@ -24,7 +24,10 @@ fn parse_ip(s: &str) -> PyResult<IpAddr> {
 /// Parse an `EPICS_PVA_ADDR_LIST`-style string into a list of IP strings.
 #[pyfunction(name = "parse_addr_list")]
 fn parse_addr_list_py(s: &str) -> Vec<String> {
-    parse_addr_list(s).into_iter().map(|ip| ip.to_string()).collect()
+    parse_addr_list(s)
+        .into_iter()
+        .map(|ip| ip.to_string())
+        .collect()
 }
 
 /// Return the auto-detected broadcast targets as list of
@@ -76,9 +79,7 @@ fn to_search_targets(items: Vec<(String, String)>) -> PyResult<Vec<SearchTarget>
         .collect()
 }
 
-fn resolve_targets(
-    targets: Option<Vec<(String, String)>>,
-) -> PyResult<Vec<SearchTarget>> {
+fn resolve_targets(targets: Option<Vec<(String, String)>>) -> PyResult<Vec<SearchTarget>> {
     match targets {
         Some(items) => to_search_targets(items),
         None => Ok(build_search_targets(None, None)),
@@ -140,9 +141,10 @@ fn search_pv_tcp_py(
         pyo3::exceptions::PyValueError::new_err(format!("invalid name server {name_server}: {e}"))
     })?;
     let dur = Duration::from_secs_f64(timeout);
-    let addr = block_on_py(py, async move {
-        search_pv_tcp(&pv_name, ns, dur, debug).await
-    })
+    let addr = block_on_py(
+        py,
+        async move { search_pv_tcp(&pv_name, ns, dur, debug).await },
+    )
     .map_err(to_py_err)?;
     Ok(addr.to_string())
 }

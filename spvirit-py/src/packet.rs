@@ -149,7 +149,10 @@ impl PyPacket {
     fn __repr__(&self) -> String {
         format!(
             "Packet(command={} ({}), flags=0x{:02x}, payload_length={})",
-            self.command, self.command_name(), self.flags_raw, self.payload_length
+            self.command,
+            self.command_name(),
+            self.flags_raw,
+            self.payload_length
         )
     }
 }

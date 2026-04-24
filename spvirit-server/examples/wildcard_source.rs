@@ -31,8 +31,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use spvirit_codec::spvd_decode::{DecodedValue, FieldDesc, FieldType, StructureDesc, TypeCode};
-use spvirit_server::pvstore::{PvInfo, Source};
 use spvirit_server::PvaServer;
+use spvirit_server::pvstore::{PvInfo, Source};
 use spvirit_types::{NtPayload, NtScalar, ScalarValue};
 use tokio::sync::{RwLock, mpsc};
 
@@ -115,17 +115,15 @@ impl Source for WildcardSource {
             let new_val = match &value {
                 DecodedValue::Float64(v) => ScalarValue::F64(*v),
                 DecodedValue::Int32(v) => ScalarValue::F64(*v as f64),
-                DecodedValue::Structure(fields) => {
-                    fields
-                        .iter()
-                        .find(|(k, _)| k == "value")
-                        .and_then(|(_, v)| match v {
-                            DecodedValue::Float64(f) => Some(ScalarValue::F64(*f)),
-                            DecodedValue::Int32(i) => Some(ScalarValue::F64(*i as f64)),
-                            _ => None,
-                        })
-                        .unwrap_or(ScalarValue::F64(0.0))
-                }
+                DecodedValue::Structure(fields) => fields
+                    .iter()
+                    .find(|(k, _)| k == "value")
+                    .and_then(|(_, v)| match v {
+                        DecodedValue::Float64(f) => Some(ScalarValue::F64(*f)),
+                        DecodedValue::Int32(i) => Some(ScalarValue::F64(*i as f64)),
+                        _ => None,
+                    })
+                    .unwrap_or(ScalarValue::F64(0.0)),
                 _ => return Err("unsupported value type".to_string()),
             };
 
