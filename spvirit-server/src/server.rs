@@ -10,6 +10,8 @@ use regex::Regex;
 use tracing::{error, info};
 
 use crate::beacon::{BeaconConfig, run_beacon};
+use tokio::net::TcpListener;
+
 use crate::handler::{PvListMode, ServerState, rand_guid, run_tcp_server, run_udp_search};
 use crate::monitor::MonitorRegistry;
 use crate::pvstore::SourceRegistry;
@@ -132,6 +134,12 @@ pub async fn run_pva_server_with_registry(
             .unwrap_or("<none>")
     );
 
+    // Bind TCP before spawning anything.  If the port is already in use we
+    // return an error here and the beacon is never started, preventing a
+    // ghost-beacon that advertises a port this process does not serve.
+    let tcp_listener = TcpListener::bind(tcp_addr).await?;
+    info!("TCP listener bound on {}", tcp_addr);
+
     let beacon_config = BeaconConfig {
         target: config.beacon_target,
         guid,
@@ -158,7 +166,7 @@ pub async fn run_pva_server_with_registry(
 
     let tcp_state = state.clone();
     let tcp_task = tokio::spawn(async move {
-        if let Err(e) = run_tcp_server(tcp_state, tcp_addr, config.conn_timeout).await {
+        if let Err(e) = run_tcp_server(tcp_state, tcp_listener, config.conn_timeout).await {
             error!("TCP server error: {}", e);
         }
     });

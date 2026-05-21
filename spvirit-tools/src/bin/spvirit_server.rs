@@ -294,6 +294,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tcp_addr = SocketAddr::new(listen_ip, tcp_port);
     let udp_addr = SocketAddr::new(listen_ip, udp_port);
 
+    // Bind TCP before spawning anything.  An EADDRINUSE error here exits
+    // before the beacon task is created, preventing ghost beacons.
+    let tcp_listener = TcpListener::bind(tcp_addr).await?;
+
     let udp_state = state.clone();
     info!(
         "Starting PVA server: udp={} tcp={} reload={}s pvlist_mode={:?} pvlist_max={} filter={}",
@@ -317,7 +321,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tcp_state = state.clone();
     let tcp_task = tokio::spawn(async move {
-        if let Err(e) = run_tcp_server(tcp_state, tcp_addr, Duration::from_secs(conn_timeout)).await
+        if let Err(e) =
+            run_tcp_server(tcp_state, tcp_listener, Duration::from_secs(conn_timeout)).await
         {
             error!("TCP server error: {}", e);
         }
@@ -500,10 +505,9 @@ async fn run_udp_search(
 
 async fn run_tcp_server(
     state: Arc<ServerState>,
-    addr: SocketAddr,
+    listener: TcpListener,
     conn_timeout: Duration,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let listener = TcpListener::bind(addr).await?;
     let conn_id = Arc::new(AtomicU64::new(1));
 
     loop {
@@ -4041,12 +4045,15 @@ fn infer_udp_response_ip(peer: SocketAddr) -> Option<IpAddr> {
 }
 
 fn rand_guid() -> [u8; 12] {
-    let now = SystemTime::now()
+    let pid = std::process::id().to_le_bytes();
+    let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .as_nanos()
+        .to_le_bytes();
     let mut guid = [0u8; 12];
-    let bytes = now.as_nanos().to_le_bytes();
-    guid.copy_from_slice(&bytes[0..12]);
+    guid[..4].copy_from_slice(&pid);
+    guid[4..12].copy_from_slice(&nanos[..8]);
     guid
 }
 

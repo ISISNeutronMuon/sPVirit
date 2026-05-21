@@ -286,12 +286,15 @@ pub fn infer_udp_response_ip(peer: SocketAddr) -> Option<IpAddr> {
 }
 
 pub fn rand_guid() -> [u8; 12] {
-    let now = SystemTime::now()
+    let pid = std::process::id().to_le_bytes();
+    let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .as_nanos()
+        .to_le_bytes();
     let mut guid = [0u8; 12];
-    let bytes = now.as_nanos().to_le_bytes();
-    guid.copy_from_slice(&bytes[0..12]);
+    guid[..4].copy_from_slice(&pid);
+    guid[4..12].copy_from_slice(&nanos[..8]);
     guid
 }
 
@@ -740,12 +743,14 @@ pub async fn run_udp_search(
 // ---------------------------------------------------------------------------
 
 /// Accept TCP connections and spawn a handler for each.
+///
+/// Callers must bind the `TcpListener` before spawning any other tasks so that
+/// an `EADDRINUSE` failure is detected eagerly and the beacon is never started.
 pub async fn run_tcp_server(
     state: Arc<ServerState>,
-    addr: SocketAddr,
+    listener: TcpListener,
     conn_timeout: Duration,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let listener = TcpListener::bind(addr).await?;
     let conn_id = Arc::new(std::sync::atomic::AtomicU64::new(1));
 
     loop {
